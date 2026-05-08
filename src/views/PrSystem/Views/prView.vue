@@ -3,7 +3,6 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { useTrcloudStore } from '@/stores/trcloud'
-import HistoryPrListView from './HistoryPrListView.vue'
 
 const props = defineProps({
   initialTab: { type: String, default: 'pr' },
