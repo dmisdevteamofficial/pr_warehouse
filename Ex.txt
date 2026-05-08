@@ -1,0 +1,572 @@
+"""
+TRCLOUD Dashboard Server
+========================
+รันแล้วเปิด http://localhost:8080 ดูข้อมูลได้เลย — ไม่มี Excel
+pip install flask requests
+"""
+
+from flask import Flask, jsonify, request, render_template_string
+import requests, json, time
+from datetime import datetime
+
+app = Flask(__name__)
+
+# =============================================================================
+# CONFIG — แก้ตรงนี้
+# =============================================================================
+COOKIE     = "PHPSESSID=otrsrutn11hiccjfo9b2haigb5; _ga=GA1.2.983562244.1778134911; _gid=GA1.2.564485271.1778134911; trcloud=8e571048f440ec1245431da9a6916a01; _gat=1"
+COMPANY_ID = "25"
+PASSKEY    = "6a05946b357765415b4c931d2122a8c8"
+BASE_URL   = "https://thaidrill.trcloud.co/application"
+SLEEP_SEC  = 0.2
+
+session = requests.Session()
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    "X-Requested-With": "XMLHttpRequest",
+    "Cookie": COOKIE,
+})
+
+# =============================================================================
+# API HELPERS
+# =============================================================================
+def fetch_list(url, doc_type, date_from, date_to, use_json=False):
+    results, seen, page, total = [], set(), 0, None
+    while True:
+        payload = {
+            "company_id": COMPANY_ID, "passkey": PASSKEY, "start": page,
+            "keyword": "", "filter": "", "from": date_from, "to": date_to,
+            "date_from": date_from, "date_to": date_to, "activate_date": "on",
+            "department": "", "sort": "", "advance_search": "1", "project": "",
+            "staff": "", "source": "", "title": "", "name": "", "organization": "",
+            "tax_id": "", "doc_from": "", "doc_to": "", "total_from": "",
+            "total_to": "", "gtotal_from": "", "gtotal_to": "", "vat": "all",
+            "type": doc_type,
+        }
+        data = {"json": json.dumps(payload)} if use_json else payload
+        try:
+            r = session.post(url, data=data, timeout=30)
+            res = r.json()
+        except Exception as e:
+            break
+        if res.get("success") != 1:
+            break
+        if total is None:
+            total = int(res.get("count", 0))
+        items = res.get("result", [])
+        if not items:
+            break
+        for it in items:
+            pid = it.get("po_id") or it.get("pr_id") or it.get("expense_id") or it.get("payment_id") or it.get("id")
+            if pid and pid not in seen:
+                seen.add(pid)
+                results.append(it)
+        if total and len(results) >= total:
+            break
+        page += 1
+        time.sleep(SLEEP_SEC)
+    return results
+
+def retrieve_detail(url, doc_id, use_json=False):
+    payload = {"company_id": COMPANY_ID, "passkey": PASSKEY, "id": doc_id}
+    data = {"json": json.dumps(payload)} if use_json else payload
+    try:
+        r = session.post(url, data=data, timeout=30)
+        return r.json()
+    except:
+        return {}
+
+# =============================================================================
+# API ROUTES
+# =============================================================================
+@app.route("/api/pr")
+def api_pr():
+    date_from = request.args.get("from", "2026-02-01")
+    date_to   = request.args.get("to",   "2026-04-30")
+    url = f"{BASE_URL}/expense/api/engine-pr/pr_search_keyword.php"
+    data = fetch_list(url, "project", date_from, date_to)
+    return jsonify({"success": 1, "count": len(data), "result": data})
+
+@app.route("/api/po")
+def api_po():
+    date_from = request.args.get("from", "2026-02-01")
+    date_to   = request.args.get("to",   "2026-04-30")
+    url = f"{BASE_URL}/expense/api/engine-po/po_search_keyword.php"
+    data = fetch_list(url, "project", date_from, date_to)
+    return jsonify({"success": 1, "count": len(data), "result": data})
+
+@app.route("/api/ap")
+def api_ap():
+    date_from = request.args.get("from", "2026-02-01")
+    date_to   = request.args.get("to",   "2026-04-30")
+    url = f"{BASE_URL}/expense/api/engine-expense/expense_search_keyword.php"
+    data = fetch_list(url, "ap", date_from, date_to)
+    # ดึงสถานะการชำระ
+    for ap in data:
+        eid = ap.get("expense_id") or ap.get("id")
+        if not eid:
+            continue
+        try:
+            inner = {"company_id": COMPANY_ID, "passkey": PASSKEY, "activate_date": "on", "expense_id": eid}
+            r = session.post(f"{BASE_URL}/expense/api/engine-expense/invoice-payment.php",
+                             data={"json": json.dumps(inner)}, timeout=20)
+            pays = r.json().get("result", []) if r.json().get("success") == 1 else []
+            if pays:
+                ap["payment_status"] = "ชำระแล้ว"
+                ap["payment_amount"] = sum(float(p.get("payment", 0) or 0) for p in pays)
+            else:
+                ap["payment_status"] = "ยังไม่ชำระ"
+                ap["payment_amount"] = 0
+        except:
+            ap["payment_status"] = "ไม่ทราบ"
+        time.sleep(0.1)
+    return jsonify({"success": 1, "count": len(data), "result": data})
+
+@app.route("/api/pv")
+def api_pv():
+    date_from = request.args.get("from", "2026-02-01")
+    date_to   = request.args.get("to",   "2026-04-30")
+    url = f"{BASE_URL}/finance/api/engine-payment/payment_search_keyword.php"
+    data = fetch_list(url, "", date_from, date_to, use_json=True)
+    return jsonify({"success": 1, "count": len(data), "result": data})
+
+# =============================================================================
+# DASHBOARD HTML
+# =============================================================================
+DASHBOARD_HTML = r"""<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TRCLOUD Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0f1a;
+    --surface: #111827;
+    --surface2: #1a2235;
+    --border: #1e2d45;
+    --accent: #00d4ff;
+    --accent2: #7c3aed;
+    --green: #10b981;
+    --red: #ef4444;
+    --yellow: #f59e0b;
+    --text: #e2e8f0;
+    --text2: #94a3b8;
+    --font: 'Sarabun', sans-serif;
+    --mono: 'IBM Plex Mono', monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); min-height: 100vh; }
+
+  /* TOP BAR */
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 28px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .topbar-title { font-size: 18px; font-weight: 700; color: var(--accent); letter-spacing: 1px; }
+  .topbar-title span { color: var(--text2); font-weight: 300; font-size: 13px; margin-left: 10px; }
+
+  /* DATE CONTROLS */
+  .controls {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 14px;
+  }
+  .controls label { font-size: 12px; color: var(--text2); }
+  .controls input[type=date] {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 4px 8px; font-size: 13px; font-family: var(--mono);
+  }
+  .btn-fetch {
+    background: var(--accent); color: #000; border: none;
+    border-radius: 8px; padding: 8px 20px; font-size: 14px; font-weight: 700;
+    cursor: pointer; font-family: var(--font); transition: opacity .2s;
+  }
+  .btn-fetch:hover { opacity: .8; }
+  .btn-fetch:disabled { opacity: .4; cursor: not-allowed; }
+
+  /* MAIN */
+  .main { padding: 24px 28px; max-width: 1600px; margin: 0 auto; }
+
+  /* KPI CARDS */
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+  .kpi-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 20px; position: relative; overflow: hidden;
+    transition: border-color .2s;
+  }
+  .kpi-card:hover { border-color: var(--accent); }
+  .kpi-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  }
+  .kpi-card.pr::before { background: var(--accent); }
+  .kpi-card.po::before { background: var(--accent2); }
+  .kpi-card.ap::before { background: var(--yellow); }
+  .kpi-card.pv::before { background: var(--green); }
+  .kpi-label { font-size: 12px; color: var(--text2); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px; }
+  .kpi-num { font-size: 32px; font-weight: 700; font-family: var(--mono); color: var(--text); }
+  .kpi-sub { font-size: 13px; color: var(--text2); margin-top: 6px; }
+  .kpi-sub b { color: var(--accent); font-family: var(--mono); }
+
+  /* TABS */
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+  .tab {
+    padding: 9px 20px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text2); cursor: pointer;
+    font-size: 14px; font-family: var(--font); transition: all .15s;
+  }
+  .tab.active { background: var(--accent); color: #000; font-weight: 700; border-color: var(--accent); }
+  .tab:hover:not(.active) { border-color: var(--accent); color: var(--text); }
+
+  /* TABLE */
+  .table-wrap {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; overflow: hidden;
+  }
+  .table-header {
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .table-title { font-size: 14px; font-weight: 600; color: var(--text); }
+  .search-box {
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 6px 12px; font-size: 13px; font-family: var(--font);
+    width: 220px; outline: none;
+  }
+  .search-box:focus { border-color: var(--accent); }
+  .table-scroll { overflow-x: auto; max-height: 520px; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    background: var(--surface2); color: var(--text2); font-weight: 600;
+    padding: 11px 14px; text-align: left; white-space: nowrap;
+    position: sticky; top: 0; z-index: 10; border-bottom: 1px solid var(--border);
+    font-size: 11px; letter-spacing: .5px; text-transform: uppercase;
+  }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background .1s; }
+  tbody tr:hover { background: var(--surface2); }
+  tbody td { padding: 10px 14px; white-space: nowrap; color: var(--text); }
+  tbody td.mono { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  tbody td.num { font-family: var(--mono); text-align: right; color: var(--yellow); }
+
+  /* BADGE */
+  .badge {
+    display: inline-block; padding: 2px 10px; border-radius: 20px;
+    font-size: 11px; font-weight: 600; white-space: nowrap;
+  }
+  .badge.paid { background: rgba(16,185,129,.15); color: var(--green); border: 1px solid rgba(16,185,129,.3); }
+  .badge.unpaid { background: rgba(239,68,68,.15); color: var(--red); border: 1px solid rgba(239,68,68,.3); }
+  .badge.pending { background: rgba(245,158,11,.15); color: var(--yellow); border: 1px solid rgba(245,158,11,.3); }
+  .badge.default { background: rgba(148,163,184,.1); color: var(--text2); border: 1px solid var(--border); }
+
+  /* LOADING */
+  .loading-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(11,15,26,.85);
+    z-index: 999; justify-content: center; align-items: center; flex-direction: column; gap: 16px;
+  }
+  .loading-overlay.show { display: flex; }
+  .spinner {
+    width: 44px; height: 44px; border: 3px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(1.4)} }
+  .loading-text { font-size: 14px; color: var(--text2); font-family: var(--mono); }
+
+  /* EMPTY */
+  .empty { text-align: center; padding: 48px; color: var(--text2); font-size: 14px; }
+
+  /* FOOTER */
+  .footer { text-align: center; padding: 20px; color: var(--text2); font-size: 12px; }
+  .updated { font-family: var(--mono); color: var(--accent); }
+
+  @media (max-width: 900px) {
+    .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    .topbar { flex-direction: column; gap: 10px; align-items: flex-start; }
+  }
+</style>
+</head>
+<body>
+
+<div class="loading-overlay" id="loader">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loader-text">กำลังดึงข้อมูล...</div>
+</div>
+
+<div class="topbar">
+  <div>
+    <div class="topbar-title">TRCLOUD <span>Dashboard — Thai Drill</span></div>
+  </div>
+  <div class="controls">
+    <label>จาก</label>
+    <input type="date" id="date-from" value="2026-02-01">
+    <label>ถึง</label>
+    <input type="date" id="date-to" value="2026-04-30">
+    <div id="refresh-status" style="font-size:12px;color:var(--green);font-family:var(--mono);display:flex;align-items:center;gap:6px;">
+      <span id="live-dot" style="width:8px;height:8px;background:var(--green);border-radius:50%;display:inline-block;animation:pulse 1.5s infinite;"></span>
+      <span id="countdown-text">กำลังโหลด...</span>
+    </div>
+    <button class="btn-fetch" id="btn-fetch" onclick="fetchAll(true)">⟳ รีเฟรชเดี๋ยวนี้</button>
+  </div>
+</div>
+
+<div class="main">
+  <!-- KPI -->
+  <div class="kpi-grid">
+    <div class="kpi-card pr">
+      <div class="kpi-label">ใบขอซื้อ (PR)</div>
+      <div class="kpi-num" id="kpi-pr">—</div>
+      <div class="kpi-sub">มูลค่ารวม <b id="kpi-pr-amt">—</b></div>
+    </div>
+    <div class="kpi-card po">
+      <div class="kpi-label">ใบสั่งซื้อ (PO)</div>
+      <div class="kpi-num" id="kpi-po">—</div>
+      <div class="kpi-sub">มูลค่ารวม <b id="kpi-po-amt">—</b></div>
+    </div>
+    <div class="kpi-card ap">
+      <div class="kpi-label">บิลค่าใช้จ่าย (AP)</div>
+      <div class="kpi-num" id="kpi-ap">—</div>
+      <div class="kpi-sub">ค้างชำระ <b id="kpi-ap-unpaid">—</b></div>
+    </div>
+    <div class="kpi-card pv">
+      <div class="kpi-label">ใบสำคัญจ่าย (PV)</div>
+      <div class="kpi-num" id="kpi-pv">—</div>
+      <div class="kpi-sub">มูลค่ารวม <b id="kpi-pv-amt">—</b></div>
+    </div>
+  </div>
+
+  <!-- TABS -->
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('pr')">PR ใบขอซื้อ</button>
+    <button class="tab" onclick="showTab('po')">PO ใบสั่งซื้อ</button>
+    <button class="tab" onclick="showTab('ap')">AP ค่าใช้จ่าย</button>
+    <button class="tab" onclick="showTab('pv')">PV ใบสำคัญจ่าย</button>
+  </div>
+
+  <!-- TABLES -->
+  <div id="tab-pr" class="table-wrap">
+    <div class="table-header">
+      <span class="table-title">ใบขอซื้อ (PR)</span>
+      <input class="search-box" placeholder="ค้นหา..." oninput="filterTable('pr-table', this.value)">
+    </div>
+    <div class="table-scroll"><table id="pr-table"><thead><tr>
+      <th>เลขที่เอกสาร</th><th>วันที่</th><th>ผู้ขาย/หน่วยงาน</th>
+      <th>แผนก</th><th>โครงการ</th><th style="text-align:right">มูลค่า</th><th>สถานะ</th>
+    </tr></thead><tbody id="pr-body"><tr><td colspan="7" class="empty">กด "ดึงข้อมูล" เพื่อโหลด</td></tr></tbody></table></div>
+  </div>
+
+  <div id="tab-po" class="table-wrap" style="display:none">
+    <div class="table-header">
+      <span class="table-title">ใบสั่งซื้อ (PO)</span>
+      <input class="search-box" placeholder="ค้นหา..." oninput="filterTable('po-table', this.value)">
+    </div>
+    <div class="table-scroll"><table id="po-table"><thead><tr>
+      <th>เลขที่เอกสาร</th><th>วันที่</th><th>ผู้ขาย/หน่วยงาน</th>
+      <th>อ้างอิง PR</th><th>โครงการ</th><th style="text-align:right">มูลค่า</th><th>สถานะ</th>
+    </tr></thead><tbody id="po-body"><tr><td colspan="7" class="empty">กด "ดึงข้อมูล" เพื่อโหลด</td></tr></tbody></table></div>
+  </div>
+
+  <div id="tab-ap" class="table-wrap" style="display:none">
+    <div class="table-header">
+      <span class="table-title">บิลค่าใช้จ่าย (AP)</span>
+      <input class="search-box" placeholder="ค้นหา..." oninput="filterTable('ap-table', this.value)">
+    </div>
+    <div class="table-scroll"><table id="ap-table"><thead><tr>
+      <th>เลขที่เอกสาร</th><th>วันที่</th><th>ผู้ขาย/หน่วยงาน</th>
+      <th>อ้างอิง PO</th><th>ครบกำหนด</th><th style="text-align:right">มูลค่า</th><th>การชำระ</th>
+    </tr></thead><tbody id="ap-body"><tr><td colspan="7" class="empty">กด "ดึงข้อมูล" เพื่อโหลด</td></tr></tbody></table></div>
+  </div>
+
+  <div id="tab-pv" class="table-wrap" style="display:none">
+    <div class="table-header">
+      <span class="table-title">ใบสำคัญจ่าย (PV)</span>
+      <input class="search-box" placeholder="ค้นหา..." oninput="filterTable('pv-table', this.value)">
+    </div>
+    <div class="table-scroll"><table id="pv-table"><thead><tr>
+      <th>เลขที่เอกสาร</th><th>วันที่</th><th>ผู้ขาย/หน่วยงาน</th>
+      <th>อ้างอิง</th><th>โครงการ</th><th style="text-align:right">มูลค่า</th><th>สถานะ</th>
+    </tr></thead><tbody id="pv-body"><tr><td colspan="7" class="empty">กด "ดึงข้อมูล" เพื่อโหลด</td></tr></tbody></table></div>
+  </div>
+
+  <div class="footer">
+    อัปเดตล่าสุด: <span class="updated" id="last-updated">—</span>
+  </div>
+</div>
+
+<script>
+const fmt = n => n == null ? '—' : Number(n).toLocaleString('th-TH', {minimumFractionDigits:2, maximumFractionDigits:2});
+const fmtShort = n => n == null ? '—' : Number(n).toLocaleString('th-TH', {maximumFractionDigits:0});
+
+function badge(status) {
+  if (!status) return `<span class="badge default">—</span>`;
+  const s = status.toString().toLowerCase();
+  if (s.includes('ชำระแล้ว') || s.includes('paid') || s.includes('complete') || s.includes('อนุมัติ'))
+    return `<span class="badge paid">${status}</span>`;
+  if (s.includes('ยังไม่') || s.includes('ค้าง') || s.includes('unpaid') || s.includes('cancel'))
+    return `<span class="badge unpaid">${status}</span>`;
+  if (s.includes('รอ') || s.includes('pending') || s.includes('draft') || s.includes('ส่ง'))
+    return `<span class="badge pending">${status}</span>`;
+  return `<span class="badge default">${status}</span>`;
+}
+
+function showTab(name) {
+  ['pr','po','ap','pv'].forEach(t => {
+    document.getElementById('tab-'+t).style.display = t===name ? '' : 'none';
+  });
+  document.querySelectorAll('.tab').forEach((el,i) => {
+    el.classList.toggle('active', ['pr','po','ap','pv'][i] === name);
+  });
+}
+
+function filterTable(tableId, q) {
+  const rows = document.querySelectorAll('#'+tableId+' tbody tr');
+  q = q.toLowerCase();
+  rows.forEach(r => {
+    r.style.display = r.innerText.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+
+const REFRESH_SEC = 30;
+let countdown = REFRESH_SEC;
+let countdownTimer = null;
+let isFetching = false;
+
+function setLoading(show, text='กำลังดึงข้อมูล...') {
+  document.getElementById('loader').classList.toggle('show', show);
+  document.getElementById('loader-text').textContent = text;
+  document.getElementById('btn-fetch').disabled = show;
+}
+
+function startCountdown() {
+  if (countdownTimer) clearInterval(countdownTimer);
+  countdown = REFRESH_SEC;
+  document.getElementById('countdown-text').textContent = `รีเฟรชใน ${countdown}s`;
+  countdownTimer = setInterval(() => {
+    countdown--;
+    if (countdown <= 0) {
+      clearInterval(countdownTimer);
+      fetchAll(false);
+    } else {
+      document.getElementById('countdown-text').textContent = `รีเฟรชใน ${countdown}s`;
+    }
+  }, 1000);
+}
+
+async function fetchAll(manual=false) {
+  if (isFetching) return;
+  isFetching = true;
+  if (countdownTimer) clearInterval(countdownTimer);
+  document.getElementById('countdown-text').textContent = 'กำลังโหลด...';
+
+  const from = document.getElementById('date-from').value;
+  const to   = document.getElementById('date-to').value;
+  const qs   = `?from=${from}&to=${to}`;
+
+  if (manual) setLoading(true, 'กำลังดึงข้อมูล...');
+  try {
+    const [prRes, poRes, apRes, pvRes] = await Promise.all([
+      fetch('/api/pr'+qs).then(r=>r.json()).catch(()=>({result:[]})),
+      fetch('/api/po'+qs).then(r=>r.json()).catch(()=>({result:[]})),
+      fetch('/api/ap'+qs).then(r=>r.json()).catch(()=>({result:[]})),
+      fetch('/api/pv'+qs).then(r=>r.json()).catch(()=>({result:[]})),
+    ]);
+    renderPR(prRes.result || []);
+    renderPO(poRes.result || []);
+    renderAP(apRes.result || []);
+    renderPV(pvRes.result || []);
+    updateKPI(prRes.result||[], poRes.result||[], apRes.result||[], pvRes.result||[]);
+    document.getElementById('last-updated').textContent = new Date().toLocaleString('th-TH');
+  } catch(e) {
+    console.error('fetch error:', e);
+  }
+  if (manual) setLoading(false);
+  isFetching = false;
+  startCountdown();
+}
+
+// โหลดอัตโนมัติทันทีที่เปิดหน้า
+window.addEventListener('DOMContentLoaded', () => fetchAll(true));
+
+// รีเฟรชเมื่อเปลี่ยนวันที่
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('date-from').addEventListener('change', () => fetchAll(true));
+  document.getElementById('date-to').addEventListener('change', () => fetchAll(true));
+});
+
+function updateKPI(pr, po, ap, pv) {
+  document.getElementById('kpi-pr').textContent = pr.length;
+  document.getElementById('kpi-po').textContent = po.length;
+  document.getElementById('kpi-ap').textContent = ap.length;
+  document.getElementById('kpi-pv').textContent = pv.length;
+
+  const sum = (arr, key) => arr.reduce((s,x)=>s+parseFloat(x[key]||0),0);
+  document.getElementById('kpi-pr-amt').textContent = fmtShort(sum(pr,'grand_total')) + ' ฿';
+  document.getElementById('kpi-po-amt').textContent = fmtShort(sum(po,'grand_total')) + ' ฿';
+  const unpaid = ap.filter(x => (x.payment_status||'').includes('ยังไม่'));
+  document.getElementById('kpi-ap-unpaid').textContent = unpaid.length + ' ใบ / ' + fmtShort(sum(unpaid,'grand_total')) + ' ฿';
+  document.getElementById('kpi-pv-amt').textContent = fmtShort(sum(pv,'grand_total')) + ' ฿';
+}
+
+function renderPR(data) {
+  const tbody = document.getElementById('pr-body');
+  if (!data.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">ไม่พบข้อมูล</td></tr>'; return; }
+  tbody.innerHTML = data.map(r => `<tr>
+    <td class="mono">${r.document_number||r.po_id||'—'}</td>
+    <td>${r.issue_date||'—'}</td>
+    <td>${r.organization||'—'}</td>
+    <td>${r.department||'—'}</td>
+    <td>${r.project||'—'}</td>
+    <td class="num">${fmt(r.grand_total)}</td>
+    <td>${badge(r.status)}</td>
+  </tr>`).join('');
+}
+
+function renderPO(data) {
+  const tbody = document.getElementById('po-body');
+  if (!data.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">ไม่พบข้อมูล</td></tr>'; return; }
+  tbody.innerHTML = data.map(r => `<tr>
+    <td class="mono">${r.document_number||r.po_id||'—'}</td>
+    <td>${r.issue_date||'—'}</td>
+    <td>${r.organization||'—'}</td>
+    <td class="mono">${r.reference||'—'}</td>
+    <td>${r.project||'—'}</td>
+    <td class="num">${fmt(r.grand_total)}</td>
+    <td>${badge(r.status)}</td>
+  </tr>`).join('');
+}
+
+function renderAP(data) {
+  const tbody = document.getElementById('ap-body');
+  if (!data.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">ไม่พบข้อมูล</td></tr>'; return; }
+  tbody.innerHTML = data.map(r => `<tr>
+    <td class="mono">${r.invoice_number||r.document_number||r.expense_id||'—'}</td>
+    <td>${r.issue_date||'—'}</td>
+    <td>${r.organization||'—'}</td>
+    <td class="mono">${r.po||r.reference||'—'}</td>
+    <td>${r.due_date||'—'}</td>
+    <td class="num">${fmt(r.grand_total)}</td>
+    <td>${badge(r.payment_status)}</td>
+  </tr>`).join('');
+}
+
+function renderPV(data) {
+  const tbody = document.getElementById('pv-body');
+  if (!data.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">ไม่พบข้อมูล</td></tr>'; return; }
+  tbody.innerHTML = data.map(r => `<tr>
+    <td class="mono">${(r.company_format||'')+( r.document_number||r.payment_id||'')}</td>
+    <td>${r.issue_date||'—'}</td>
+    <td>${r.organization||'—'}</td>
+    <td class="mono">${r.reference||'—'}</td>
+    <td>${r.project||'—'}</td>
+    <td class="num">${fmt(r.grand_total)}</td>
+    <td>${badge(r.status)}</td>
+  </tr>`).join('');
+}
+</script>
+</body>
+</html>"""
+

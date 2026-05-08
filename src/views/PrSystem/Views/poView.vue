@@ -1,24 +1,9 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
-import { supabase } from '@/lib/supabase'
-import { useAuthStore } from '@/stores/auth'
+import { computed, onMounted, ref } from 'vue'
 import { useTrcloudStore } from '@/stores/trcloud'
-import HistoryPrListView from './HistoryPrListView.vue'
 
-const props = defineProps({
-  initialTab: { type: String, default: 'pr' },
-  initialSource: { type: String, default: 'supabase' }
-})
-
-const auth = useAuthStore()
 const trcloudStore = useTrcloudStore()
-
-const loading = ref(true)
-const saving = ref(false)
-const rows = ref([])
-
-// --- TRCLOUD API Integration ---
-const trcloudRows = computed(() => trcloudStore.prRows)
+const trcloudPoRows = computed(() => trcloudStore.poRows)
 const trcloudLoading = computed(() => trcloudStore.loading)
 const trcloudDateFrom = computed({
   get: () => trcloudStore.dateFrom,
@@ -34,36 +19,37 @@ const projectFilter = ref('')
 const statusFilter = ref('')
 
 const availableProjects = computed(() => {
-  const projects = trcloudStore.prRows.map(r => r.project).filter(Boolean)
+  const projects = trcloudStore.poRows.map(r => r.project).filter(Boolean)
   return [...new Set(projects)].sort()
 })
 
 const availableStatuses = computed(() => {
-  const statuses = trcloudStore.prRows.map(r => r.status).filter(Boolean)
+  const statuses = trcloudStore.poRows.map(r => r.status).filter(Boolean)
   return [...new Set(statuses)].sort()
 })
 
 const trcloudKpi = computed(() => {
   const sum = (arr, key) => arr.reduce((s, x) => s + parseFloat(x[key] || 0), 0)
-  const prAmt = sum(trcloudRows.value, 'grand_total')
+  const poAmt = sum(filteredTrcloudRows.value, 'grand_total')
   return {
-    prCount: trcloudRows.value.length,
-    prAmt
+    poCount: filteredTrcloudRows.value.length,
+    poAmt
   }
 })
 
 async function fetchTrcloudData() {
-  await trcloudStore.fetchTrcloudData('pr')
+  await trcloudStore.fetchTrcloudData('po')
 }
 
 onMounted(() => {
-  if (trcloudRows.value.length === 0) {
+  // Only fetch if data is empty to avoid redundant calls
+  if (trcloudStore.poRows.length === 0) {
     fetchTrcloudData()
   }
 })
 
 const filteredTrcloudRows = computed(() => {
-  let rows = trcloudStore.prRows
+  let rows = trcloudStore.poRows
 
   // Filter by Date (Client-side)
   if (trcloudDateFrom.value || trcloudDateTo.value) {
@@ -139,10 +125,10 @@ function calculateDocAge(dateStr) {
 </script>
 
 <template>
-  <div class="p-0 md:p-0">
+  <div>
     <div class="mb-6">
-      <h1 class="text-[20px] font-semibold" style="color: var(--color-text-primary)">รายการ PR </h1>
-      <p class="text-[13px] mt-0.5" style="color: var(--color-text-muted)">จัดการข้อมูลการขอซื้อจากระบบ TRCLOUD</p>
+      <h1 class="text-[20px] font-semibold" style="color: var(--color-text-primary)">รายการ PO</h1>
+      <p class="text-[13px] mt-0.5" style="color: var(--color-text-muted)">จัดการข้อมูลใบสั่งซื้อจาก TRCLOUD</p>
     </div>
 
     <!-- Mode Switcher -->
@@ -171,20 +157,21 @@ function calculateDocAge(dateStr) {
       </button>
     </div>
 
-    <!-- TRCLOUD Section Only -->
+    <!-- KPI Card -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
       <div class="p-4 rounded-xl border relative overflow-hidden" style="background: var(--color-bg-card); border-color: var(--color-border)">
-        <div class="absolute top-0 left-0 w-full h-1 bg-blue-500"></div>
+        <div class="absolute top-0 left-0 w-full h-1 bg-purple-500"></div>
         <div class="text-[12px] font-medium uppercase tracking-wider mb-2" style="color: var(--color-text-muted)">
-          {{ viewMode === 'all' ? 'ใบขอซื้อ (ทั้งหมด)' : 'ใบขอซื้อ (ติดตามงาน)' }}
+          {{ viewMode === 'all' ? 'ใบสั่งซื้อ (ทั้งหมด)' : 'ใบสั่งซื้อ (ติดตามงาน)' }}
         </div>
-        <div class="text-2xl font-bold font-mono" style="color: var(--color-text-primary)">{{ filteredTrcloudRows.length }}</div>
+        <div class="text-2xl font-bold font-mono" style="color: var(--color-text-primary)">{{ trcloudKpi.poCount }}</div>
         <div class="text-[13px] mt-1" style="color: var(--color-text-muted)">
-          มูลค่ารวม <span class="font-mono text-blue-500 font-bold">{{ Number(filteredTrcloudRows.reduce((s, x) => s + parseFloat(x.grand_total || 0), 0)).toLocaleString('th-TH') }} ฿</span>
+          มูลค่ารวม <span class="font-mono text-purple-500 font-bold">{{ Number(trcloudKpi.poAmt).toLocaleString('th-TH') }} ฿</span>
         </div>
       </div>
     </div>
 
+    <!-- Filters -->
     <div class="flex flex-col gap-4 mb-6 p-4 rounded-xl border" style="background: var(--color-bg-card); border-color: var(--color-border)">
       <div class="flex flex-wrap items-center gap-4">
         <div class="flex items-center gap-2">
@@ -195,7 +182,7 @@ function calculateDocAge(dateStr) {
           <label class="text-[12px] font-medium" style="color: var(--color-text-muted)">ถึง</label>
           <input v-model="trcloudDateTo" type="date" class="px-3 py-1.5 bg-transparent border rounded-lg text-[13px] focus:outline-none" style="border-color: var(--color-border); color: var(--color-text-primary)" />
         </div>
-        
+
         <!-- Project Filter -->
         <div class="flex items-center gap-2">
           <label class="text-[12px] font-medium" style="color: var(--color-text-muted)">โครงการ</label>
@@ -221,10 +208,11 @@ function calculateDocAge(dateStr) {
       </div>
       <div class="relative w-full">
         <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-[14px]" style="color: var(--color-text-muted)"></i>
-        <input v-model="trcloudFilter" type="text" placeholder="ค้นหาใน TRCLOUD PR..." class="w-full pl-9 pr-4 py-2 bg-transparent border rounded-lg text-[13px] focus:outline-none focus:ring-1 transition-all" style="border-color: var(--color-border); color: var(--color-text-primary)" />
+        <input v-model="trcloudFilter" type="text" placeholder="ค้นหาใน PO..." class="w-full pl-9 pr-4 py-2 bg-transparent border rounded-lg text-[13px] focus:outline-none focus:ring-1 transition-all" style="border-color: var(--color-border); color: var(--color-text-primary)" />
       </div>
     </div>
 
+    <!-- Table -->
     <div class="rounded-xl border overflow-hidden" style="background: var(--color-bg-card); border-color: var(--color-border)">
       <div class="overflow-x-auto">
         <table class="w-full text-[13px] min-w-[880px] border-collapse">
@@ -234,7 +222,7 @@ function calculateDocAge(dateStr) {
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่</th>
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อายุเอกสาร</th>
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ผู้ขาย/หน่วยงาน</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">แผนก</th>
+              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิง PR</th>
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">โครงการ</th>
               <th class="px-4 py-3 text-right font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">มูลค่า</th>
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted)">สถานะ</th>
@@ -250,14 +238,14 @@ function calculateDocAge(dateStr) {
               </td>
             </tr>
             <tr v-else-if="!filteredTrcloudRows.length">
-              <td colspan="8" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูล PR จาก TRCLOUD</td>
+              <td colspan="8" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูล PO จาก TRCLOUD</td>
             </tr>
-            <tr v-for="r in filteredTrcloudRows" :key="r.pr_id || r.id" class="hover:bg-gray-50/50 transition-colors border-bottom" style="border-bottom: 1px solid var(--color-border)">
-              <td class="px-4 py-3 font-medium font-mono" style="color: #00d4ff; border-right: 1px solid var(--color-border)">{{ r.document_number || r.pr_id || '-' }}</td>
+            <tr v-for="r in filteredTrcloudRows" :key="r.po_id || r.id" class="hover:bg-gray-50/50 transition-colors border-bottom" style="border-bottom: 1px solid var(--color-border)">
+              <td class="px-4 py-3 font-medium font-mono" style="color: #7c3aed; border-right: 1px solid var(--color-border)">{{ r.document_number || r.po_id || '-' }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.issue_date || '-' }}</td>
               <td class="px-4 py-3 font-medium" style="color: #3b82f6; border-right: 1px solid var(--color-border)">{{ calculateDocAge(r.issue_date || r.date) }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.organization || '-' }}</td>
-              <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.department || '-' }}</td>
+              <td class="px-4 py-3 font-mono" style="color: #00d4ff; border-right: 1px solid var(--color-border)">{{ r.reference || '-' }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.project || '-' }}</td>
               <td class="px-4 py-3 text-right font-mono" style="color: #f59e0b; border-right: 1px solid var(--color-border)">{{ Number(r.grand_total || 0).toLocaleString('th-TH', {minimumFractionDigits:2, maximumFractionDigits:2}) }}</td>
               <td class="px-4 py-3">
@@ -272,8 +260,3 @@ function calculateDocAge(dateStr) {
     </div>
   </div>
 </template>
-
-<style scoped>
-.slide-right-enter-active, .slide-right-leave-active { transition: all 0.3s ease; }
-.slide-right-enter-from, .slide-right-leave-to { transform: translateX(100%); opacity: 0; }
-</style>

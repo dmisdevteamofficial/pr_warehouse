@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from "vue"
 import { useAuthStore } from "@/stores/auth"
+import { useTrcloudStore } from "@/stores/trcloud"
 import AdminSidebar from "./layout/AdminSidebar.vue"
 import AdminHeader from "./layout/AdminHeader.vue"
 import SystemadminLisView from "./Views/SystemadminLisView.vue"
@@ -16,9 +17,13 @@ import TrackingView from "./Views/trackingView.vue"
 import SlipView from "./Views/slipView.vue"
 import LineView from "./Views/lineView.vue"
 import PrView from "./Views/prView.vue"
+import PoView from "./Views/poView.vue"
+import ApView from "./Views/apView.vue"
+import PvView from "./Views/pvView.vue"
 import HistoryPrListView from "./Views/historyPrListView.vue"
 
 const auth = useAuthStore()
+const trcloudStore = useTrcloudStore()
 const sidebarOpen = ref(false)
 
 const headerUser = computed(() => ({
@@ -36,6 +41,7 @@ const selectionOptions = [
   { itemId: "/#/pr_list", itemLabel: "รายการ PR" },
   { itemId: "/#/pr_po", itemLabel: "รายการ PO" },
   { itemId: "/#/pr_ap", itemLabel: "รายการ AP" },
+  { itemId: "/#/pr_pv", itemLabel: "รายการ PV" },
   { itemId: "/#/pr_history", itemLabel: "ประวัติทั้งหมด" },
   { itemId: "/#/form_submit", itemLabel: "ฟอมร์ส่งรายการ" },
   { itemId: "/#/form_appo", itemLabel: "ฟอร์ม AP/PO" },
@@ -76,6 +82,7 @@ const activePage = computed(() => {
   if (id.includes("pr_list")) return "pr_list"
   if (id.includes("pr_po")) return "pr_po"
   if (id.includes("pr_ap")) return "pr_ap"
+  if (id.includes("pr_pv")) return "pr_pv"
   if (id.includes("pr_history")) return "pr_history"
   if (id.includes("system_admins_purchase")) return "system_admins_purchase"
   if (id.includes("system_admins_receive")) return "system_admins_receive"
@@ -117,6 +124,11 @@ function onCancelEditApRequest() {
 }
 
 onMounted(() => {
+  // Pre-load TRCLOUD data
+  if (!trcloudStore.isLoaded) {
+    trcloudStore.fetchAll()
+  }
+  
   try {
     const raw = localStorage.getItem(SELECTION_STORAGE_KEY)
     if (!raw) return
@@ -176,6 +188,9 @@ const onLogout = () => {
         <SlipView v-else-if="activePage === 'form_slip_match'" />
         <LineView v-else-if="activePage === 'form_line_message'" />
         <PrView v-else-if="activePage === 'pr_list'" />
+        <PoView v-else-if="activePage === 'pr_po'" />
+        <ApView v-else-if="activePage === 'pr_ap'" />
+        <PvView v-else-if="activePage === 'pr_pv'" />
         <HistoryPrListView v-else-if="activePage === 'pr_history'" />
         <div
           v-else-if="activePage !== 'default'"

@@ -2,56 +2,100 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Chart, registerables } from 'chart.js'
 import { supabase } from '@/lib/supabase'
+import { useTrcloudStore } from '@/stores/trcloud'
 
 Chart.register(...registerables)
 
+const trcloudStore = useTrcloudStore()
 const loading = ref(true)
 const errorText = ref('')
-const filterMode = ref('last30')
+const filterMode = ref('all')
 const filterFromInput = ref('')
 const filterToInput = ref('')
 const appliedFrom = ref('')
 const appliedTo = ref('')
+
+const prCount = computed(() => trcloudStore.prRows.length)
+const poCount = computed(() => trcloudStore.poRows.length)
+const apCount = computed(() => trcloudStore.apRows.length)
+const pvCount = computed(() => trcloudStore.pvRows.length)
+
+// Tracking counts (items that are not finished/paid)
+const prTrackingCount = computed(() => {
+  return trcloudStore.prRows.filter(r => {
+    const s = (r.status || '').toLowerCase()
+    return !s.includes('success') && !s.includes('เสร็จสิ้น') && !s.includes('เรียบร้อย')
+  }).length
+})
+
+const poTrackingCount = computed(() => {
+  return trcloudStore.poRows.filter(r => {
+    const s = (r.status || '').toLowerCase()
+    return !s.includes('success') && !s.includes('เสร็จสิ้น') && !s.includes('เรียบร้อย')
+  }).length
+})
+
+const apTrackingCount = computed(() => {
+  return trcloudStore.apRows.filter(r => {
+    const s = (r.payment_status || '').toLowerCase()
+    return s.includes('ยังไม่') || s.includes('unpaid') || s.includes('ค้าง')
+  }).length
+})
+
+const pvTrackingCount = computed(() => {
+  return trcloudStore.pvRows.filter(r => {
+    const s = (r.status || '').toLowerCase()
+    // Tracking means it's not finished, not paid, and not cancelled
+    return !s.includes('ชำระแล้ว') && !s.includes('paid') && !s.includes('complete') && 
+           !s.includes('อนุมัติ') && !s.includes('ยกเลิก') && !s.includes('cancel')
+  }).length
+})
+
+const apPayCount = computed(() => trcloudStore.apRows.filter(x => (x.payment_status || '').includes('ยังไม่')).length)
+const apPaidCount = computed(() => trcloudStore.apRows.filter(x => (x.payment_status || '').includes('ชำระแล้ว')).length)
+
+const prTotalAmt = computed(() => trcloudStore.prRows.reduce((s, x) => s + parseFloat(x.grand_total || 0), 0))
+const poTotalAmt = computed(() => trcloudStore.poRows.reduce((s, x) => s + parseFloat(x.grand_total || 0), 0))
+const apTotalAmt = computed(() => trcloudStore.apRows.reduce((s, x) => s + parseFloat(x.grand_total || 0), 0))
+const pvTotalAmt = computed(() => trcloudStore.pvRows.reduce((s, x) => s + parseFloat(x.grand_total || 0), 0))
+
+const apRecentRows = computed(() => [...trcloudStore.apRows].sort((a, b) => new Date(b.issue_date) - new Date(a.issue_date)).slice(0, 10))
+const prRecentRows = computed(() => [...trcloudStore.prRows].sort((a, b) => new Date(b.issue_date) - new Date(a.issue_date)).slice(0, 10))
+
+const statusPieRef = ref(null)
+const prTrendLineRef = ref(null)
+const poTrendLineRef = ref(null)
+
+let statusPieChart = null
+let prTrendLineChart = null
+let poTrendLineChart = null
+
 const departmentOptions = ref([])
 const selectedDepartment = ref('all')
 const searchApText = ref('')
 const searchUrgentPrText = ref('')
 const prMonthInput = ref('')
-
-const prCount = ref(0)
-const poCount = ref(0)
-const poOpenCount = ref(0)
-const poFinishedCount = ref(0)
-
-const apCount = ref(0)
-const apPayCount = ref(0)
-const apPartialCount = ref(0)
-const apPaidCount = ref(0)
-
-const apRecentRows = ref([])
-const urgentPrRows = ref([])
 const prRowsForCharts = ref([])
 const poRowsForCharts = ref([])
 const teamNameById = ref({})
 const urgentNameById = ref({})
+const urgentPrRows = ref([])
 
-const statusPieRef = ref(null)
 const trendLineRef = ref(null)
 const currencyPendingBarRef = ref(null)
 const currencyPaidBarRef = ref(null)
 const urgentBarRef = ref(null)
-const prTrendLineRef = ref(null)
 const receiverBarRef = ref(null)
 const purchaseStatusBarRef = ref(null)
+const monthlyComparisonBarRef = ref(null)
 
-let statusPieChart = null
 let trendLineChart = null
 let currencyPendingBarChart = null
 let currencyPaidBarChart = null
 let urgentBarChart = null
-let prTrendLineChart = null
 let receiverBarChart = null
 let purchaseStatusBarChart = null
+let monthlyComparisonBarChart = null
 
 const currencyValueLabelsPlugin = {
   id: 'currencyValueLabelsPlugin',
@@ -209,7 +253,9 @@ function applyPreset(mode) {
   const now = new Date()
   const end = startOfDay(now)
   let start = startOfDay(now)
-  if (mode === 'last7') {
+  if (mode === 'all') {
+    start = new Date('2000-01-01')
+  } else if (mode === 'last7') {
     start = new Date(end)
     start.setDate(start.getDate() - 6)
   } else {
@@ -326,7 +372,7 @@ async function fetchTeamMap() {
 }
 
 function destroyCharts() {
-  for (const c of [statusPieChart, trendLineChart, currencyPendingBarChart, currencyPaidBarChart, urgentBarChart, prTrendLineChart, receiverBarChart, purchaseStatusBarChart]) {
+  for (const c of [statusPieChart, trendLineChart, currencyPendingBarChart, currencyPaidBarChart, urgentBarChart, prTrendLineChart, receiverBarChart, purchaseStatusBarChart, monthlyComparisonBarChart]) {
     try {
       c?.destroy?.()
     } catch {
@@ -340,100 +386,41 @@ function destroyCharts() {
   prTrendLineChart = null
   receiverBarChart = null
   purchaseStatusBarChart = null
+  monthlyComparisonBarChart = null
 }
 
 async function fetchDashboard() {
   loading.value = true
   errorText.value = ''
   try {
-    const fromIso = rangeFromIso.value
-    const toIso = rangeToIso.value
-    if (!fromIso || !toIso) {
-      applyPreset('last30')
+    // Sync store dates
+    trcloudStore.dateFrom = appliedFrom.value || '2000-01-01'
+    trcloudStore.dateTo = appliedTo.value || ymd(new Date())
+
+    // If data already exists and it's within 5 minutes, use it instead of full fetch
+    const now = new Date()
+    const fiveMinutes = 5 * 60 * 1000
+    const isCacheFresh = trcloudStore.lastFetched && (now - trcloudStore.lastFetched < fiveMinutes)
+    
+    // Check if any major data is missing
+    const isAnyDataMissing = trcloudStore.prRows.length === 0 || 
+                             trcloudStore.poRows.length === 0 || 
+                             trcloudStore.apRows.length === 0 || 
+                             trcloudStore.pvRows.length === 0
+
+    if (!isCacheFresh || isAnyDataMissing) {
+      // Fetch data from TRCLOUD via store
+      await trcloudStore.fetchAll()
     }
 
-    const apBase = supabase
-      .from('ap_requests')
-      .select('id, ap_number, po_id, supplier_name, item_ref, total_price, currency_name, ap_status, option_name, created_at, qty_order, qty_received, department')
-      .gte('created_at', rangeFromIso.value)
-      .lte('created_at', rangeToIso.value)
+    // Update charts data
+    prRowsForCharts.value = trcloudStore.prRows
+    poRowsForCharts.value = trcloudStore.poRows
+    chartSourceRows.value = trcloudStore.apRows
 
-    const apQuery = selectedDepartment.value === 'all' ? apBase : apBase.eq('department', selectedDepartment.value)
+    // Urgent PRs
+    urgentPrRows.value = trcloudStore.prRows.slice(0, 10)
 
-    const apRecentBase = supabase
-      .from('ap_requests')
-      .select('id, ap_number, po_id, supplier_name, item_ref, total_price, currency_name, ap_status, option_name, created_at, department')
-      .order('created_at', { ascending: false })
-      .limit(20)
-    const apRecentQuery = selectedDepartment.value === 'all' ? apRecentBase : apRecentBase.eq('department', selectedDepartment.value)
-
-    const [prRowsRes, poRowsRes, apRowsRes, apRecentRes] = await Promise.all([
-      supabase
-        .from('purchasing_req')
-        .select('id, pr_number, urgent_id, purchase_team_id, details, amount_req, unit, created_at, created_by')
-        .gte('created_at', rangeFromIso.value)
-        .lte('created_at', rangeToIso.value)
-        .order('created_at', { ascending: false })
-        .limit(5000),
-      supabase
-        .from('purchasing_order')
-        .select('id, receive_by, status_purchase, is_finish, created_at, created_by')
-        .gte('created_at', rangeFromIso.value)
-        .lte('created_at', rangeToIso.value)
-        .order('created_at', { ascending: false })
-        .limit(5000),
-      apQuery.order('created_at', { ascending: false }).limit(5000),
-      apRecentQuery,
-    ])
-
-    const errors = [prRowsRes.error, poRowsRes.error, apRowsRes.error, apRecentRes.error].filter(Boolean)
-    if (errors.length) throw errors[0]
-
-    let prs = prRowsRes.data || []
-    let pos = poRowsRes.data || []
-    if (selectedDepartment.value !== 'all') {
-      const creatorIds = [
-        ...prs.map((r) => r.created_by).filter(Boolean),
-        ...pos.map((r) => r.created_by).filter(Boolean),
-      ]
-      const creatorDeptById = {}
-      if (creatorIds.length) {
-        const { data: creators } = await supabase
-          .from('system_users')
-          .select('id, department')
-          .in('id', [...new Set(creatorIds)])
-        for (const u of creators || []) creatorDeptById[u.id] = String(u?.department || '').trim()
-      }
-
-      prs = prs.filter((r) => String(creatorDeptById[r.created_by] || '').trim() === selectedDepartment.value)
-      pos = pos.filter((r) => String(creatorDeptById[r.created_by] || '').trim() === selectedDepartment.value)
-    }
-
-    prRowsForCharts.value = prs
-    poRowsForCharts.value = pos
-
-    prCount.value = prs.length
-    poCount.value = pos.length
-    poOpenCount.value = pos.filter((x) => x.is_finish === false).length
-    poFinishedCount.value = pos.filter((x) => x.is_finish === true).length
-
-    const apRows = apRowsRes.data || []
-    apCount.value = apRows.length
-    apPayCount.value = apRows.filter((x) => String(x.ap_status || '').trim() === 'รอชำระ').length
-    apPartialCount.value = apRows.filter((x) => String(x.ap_status || '').trim() === 'จ่ายบางส่วน').length
-    apPaidCount.value = apRows.filter((x) => String(x.ap_status || '').trim() === 'จ่ายครบ').length
-
-    apRecentRows.value = apRecentRes.data || []
-    chartSourceRows.value = apRows
-
-    const urgentOnly = prs
-      .map((r) => ({
-        ...r,
-        _urgent_name: urgentNameById.value?.[r.urgent_id] || '-',
-      }))
-      .filter((r) => String(r._urgent_name || '').includes('ด่วน'))
-      .slice(0, 20)
-    urgentPrRows.value = urgentOnly
   } catch (err) {
     errorText.value = String(err?.message || err || 'เกิดข้อผิดพลาด')
   } finally {
@@ -444,8 +431,8 @@ async function fetchDashboard() {
 const chartSourceRows = ref([])
 
 const statusChart = computed(() => {
-  const labels = ['รอชำระ', 'จ่ายบางส่วน', 'จ่ายครบ']
-  const data = [apPayCount.value, apPartialCount.value, apPaidCount.value]
+  const labels = ['ยังไม่ชำระ', 'ชำระแล้ว']
+  const data = [apPayCount.value, apPaidCount.value]
   return { labels, data }
 })
 
@@ -454,7 +441,7 @@ const trendChart = computed(() => {
   const countByDay = {}
   for (const k of keys) countByDay[k] = 0
   for (const r of chartSourceRows.value || []) {
-    const k = dayKey(r.created_at)
+    const k = dayKey(r.issue_date || r.date)
     if (!k || !(k in countByDay)) continue
     countByDay[k] += 1
   }
@@ -468,12 +455,12 @@ const currencyChart = computed(() => {
   const sumPending = {}
   const sumPaid = {}
   for (const r of chartSourceRows.value || []) {
-    const cur = String(r.currency_name || '').trim().toUpperCase()
+    const cur = String(r.currency || 'THB').trim().toUpperCase()
     if (!cur) continue
-    const amt = Number(r.total_price || 0)
+    const amt = Number(r.grand_total || 0)
     if (!Number.isFinite(amt)) continue
-    const st = String(r.ap_status || '').trim()
-    if (st === 'จ่ายครบ') sumPaid[cur] = (sumPaid[cur] || 0) + amt
+    const st = String(r.payment_status || '').trim()
+    if (st.includes('ชำระแล้ว') || st.includes('Paid')) sumPaid[cur] = (sumPaid[cur] || 0) + amt
     else sumPending[cur] = (sumPending[cur] || 0) + amt
   }
   const currencies = Array.from(new Set([...Object.keys(sumPending), ...Object.keys(sumPaid)])).sort((a, b) => a.localeCompare(b))
@@ -505,7 +492,7 @@ const prTrendChart = computed(() => {
   const countByDay = {}
   for (const k of safeKeys) countByDay[k] = 0
   for (const r of prRowsForCharts.value || []) {
-    const k = dayKey(r.created_at)
+    const k = dayKey(r.issue_date || r.date)
     if (!k || !(k in countByDay)) continue
     countByDay[k] += 1
   }
@@ -518,16 +505,16 @@ const prTrendChart = computed(() => {
 const prUrgentChart = computed(() => {
   const count = {}
   for (const r of prRowsForCharts.value || []) {
-    const name = urgentNameById.value?.[r.urgent_id] || '-'
-    count[name] = (count[name] || 0) + 1
+    const status = r.status || 'ปกติ'
+    count[status] = (count[status] || 0) + 1
   }
   const entries = Object.entries(count).sort((a, b) => b[1] - a[1]).slice(0, 8)
   const labels = entries.map((x) => x[0])
   const data = entries.map((x) => x[1])
   const colors = labels.map((l) => {
-    if (String(l).includes('ด่วนมาก')) return 'rgba(239, 68, 68, 0.78)'
-    if (String(l).includes('ด่วน')) return 'rgba(249, 115, 22, 0.78)'
-    if (String(l).includes('ปกติ')) return 'rgba(34, 197, 94, 0.78)'
+    if (String(l).includes('ชำระแล้ว') || String(l).includes('Paid') || String(l).includes('อนุมัติ')) return 'rgba(34, 197, 94, 0.78)'
+    if (String(l).includes('ยังไม่') || String(l).includes('ค้าง')) return 'rgba(239, 68, 68, 0.78)'
+    if (String(l).includes('รอ') || String(l).includes('Pending')) return 'rgba(249, 115, 22, 0.78)'
     return 'rgba(100, 116, 139, 0.78)'
   })
   return { labels, data, colors }
@@ -538,7 +525,7 @@ const urgentOnlyFiltered = computed(() => {
   const list = urgentPrRows.value || []
   if (!key) return list
   return list.filter((r) => {
-    const haystack = [r.pr_number, r.details, r._urgent_name, r.unit].filter(Boolean).join(' ').toLowerCase()
+    const haystack = [r.document_number, r.organization, r.project, r.status].filter(Boolean).join(' ').toLowerCase()
     return haystack.includes(key)
   })
 })
@@ -548,7 +535,7 @@ const apRecentFiltered = computed(() => {
   const list = apRecentRows.value || []
   if (!key) return list
   return list.filter((r) => {
-    const haystack = [r.ap_number, r.po_id, r.supplier_name, r.item_ref, r.ap_status, r.option_name, r.currency_name].filter(Boolean).join(' ').toLowerCase()
+    const haystack = [r.invoice_number, r.document_number, r.organization, r.po, r.payment_status].filter(Boolean).join(' ').toLowerCase()
     return haystack.includes(key)
   })
 })
@@ -556,8 +543,7 @@ const apRecentFiltered = computed(() => {
 const receiverChart = computed(() => {
   const count = {}
   for (const r of poRowsForCharts.value || []) {
-    if (r.is_finish !== false) continue
-    const name = String(r.receive_by || '').trim() || '-'
+    const name = String(r.project || '').trim() || '-'
     count[name] = (count[name] || 0) + 1
   }
   const entries = Object.entries(count).sort((a, b) => b[1] - a[1]).slice(0, 8)
@@ -570,7 +556,7 @@ const receiverChart = computed(() => {
 const purchaseStatusChart = computed(() => {
   const count = {}
   for (const r of poRowsForCharts.value || []) {
-    const s = String(r.status_purchase || '').trim()
+    const s = String(r.status || '').trim()
     if (!s) continue
     count[s] = (count[s] || 0) + 1
   }
@@ -598,6 +584,58 @@ const purchaseTeamTable = computed(() => {
   return Object.entries(count)
     .map(([name, n]) => ({ name, n }))
     .sort((a, b) => b.n - a.n)
+})
+
+const monthlyComparisonChart = computed(() => {
+  const prs = trcloudStore.prRows
+  const pos = trcloudStore.poRows
+  const aps = trcloudStore.apRows
+  const pvs = trcloudStore.pvRows
+
+  const getMonthKey = (dateStr) => {
+    if (!dateStr) return null
+    return dateStr.substring(0, 7) // "YYYY-MM"
+  }
+
+  // Generate 12 months of the current year
+  const currentYear = new Date().getFullYear()
+  const monthsMap = {}
+  for (let m = 1; m <= 12; m++) {
+    const monthStr = `${currentYear}-${String(m).padStart(2, '0')}`
+    monthsMap[monthStr] = { month: monthStr, pr: 0, po: 0, ap: 0, pv: 0 }
+  }
+
+  const processRows = (rows, type) => {
+    for (const r of rows) {
+      const month = getMonthKey(r.issue_date || r.date)
+      if (!month || !monthsMap[month]) continue
+      monthsMap[month][type]++
+    }
+  }
+
+  processRows(prs, 'pr')
+  processRows(pos, 'po')
+  processRows(aps, 'ap')
+  processRows(pvs, 'pv')
+
+  const sortedMonths = Object.values(monthsMap).sort((a, b) => a.month.localeCompare(b.month))
+  
+  // Mapping month numbers to Thai names for better readability
+  const monthNames = [
+    'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
+    'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'
+  ]
+
+  return {
+    labels: sortedMonths.map(m => {
+      const monthNum = parseInt(m.month.split('-')[1])
+      return monthNames[monthNum - 1]
+    }),
+    prData: sortedMonths.map(m => m.pr),
+    poData: sortedMonths.map(m => m.po),
+    apData: sortedMonths.map(m => m.ap),
+    pvData: sortedMonths.map(m => m.pv)
+  }
 })
 
 async function renderCharts() {
@@ -834,15 +872,63 @@ async function renderCharts() {
       },
     })
   }
+
+  if (monthlyComparisonBarRef.value) {
+    monthlyComparisonBarChart = new Chart(monthlyComparisonBarRef.value, {
+      type: 'bar',
+      data: {
+        labels: monthlyComparisonChart.value.labels,
+        datasets: [
+          {
+            label: 'PR',
+            data: monthlyComparisonChart.value.prData,
+            backgroundColor: 'rgba(54, 162, 235, 0.75)', // Blue
+          },
+          {
+            label: 'PO',
+            data: monthlyComparisonChart.value.poData,
+            backgroundColor: 'rgba(153, 102, 255, 0.75)', // Purple
+          },
+          {
+            label: 'AP',
+            data: monthlyComparisonChart.value.apData,
+            backgroundColor: 'rgba(255, 159, 64, 0.75)', // Orange
+          },
+          {
+            label: 'PV',
+            data: monthlyComparisonChart.value.pvData,
+            backgroundColor: 'rgba(75, 192, 192, 0.75)', // Green
+          }
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: true,
+            position: 'bottom'
+          }
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { beginAtZero: true, ticks: { precision: 0 } },
+        },
+      },
+    })
+  }
 }
 
-watch([statusChart, trendChart, currencyChart, prUrgentChart, prTrendChart, receiverChart, purchaseStatusChart], () => {
+watch([statusChart, trendChart, currencyChart, prUrgentChart, prTrendChart, receiverChart, purchaseStatusChart, monthlyComparisonChart], () => {
   if (loading.value) return
   renderCharts()
 })
 
 onMounted(async () => {
-  applyPreset('last30')
+  // Set default filter mode to "All"
+  filterMode.value = 'all'
+  applyPreset('all')
+  
   prMonthInput.value = appliedTo.value ? String(appliedTo.value).slice(0, 7) : ym(new Date())
   await Promise.all([fetchDepartmentOptions(), fetchUrgentMap(), fetchTeamMap()])
   await fetchDashboard()
@@ -865,6 +951,15 @@ onUnmounted(() => {
         <div class="mt-3 flex flex-col lg:flex-row lg:items-end gap-3">
           <div class="flex items-center gap-2">
             <span class="text-[12px] font-medium" style="color: var(--color-text-muted)">ช่วงวันที่:</span>
+            <button
+              type="button"
+              class="px-3 py-1.5 rounded-full text-[12px] font-medium border transition-all"
+              :class="filterMode === 'all' ? 'bg-blue-600 text-white' : 'hover:bg-gray-50'"
+              :style="filterMode === 'all' ? { borderColor: '#2563eb' } : { borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }"
+              @click="filterMode = 'all'; applyPreset('all'); fetchDashboard()"
+            >
+              ทั้งหมด
+            </button>
             <button
               type="button"
               class="px-3 py-1.5 rounded-full text-[12px] font-medium border transition-all"
@@ -964,25 +1059,32 @@ onUnmounted(() => {
 
     <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
       <div class="rounded-xl border p-4" style="background: var(--color-bg-card); border-color: var(--color-border)">
-        <div class="text-[12px] font-medium" style="color: var(--color-text-muted)">PR ทั้งหมด</div>
-        <div class="mt-1 text-[22px] font-semibold" style="color: var(--color-text-primary)">{{ loading ? '-' : prCount }}</div>
-      </div>
-      <div class="rounded-xl border p-4" style="background: var(--color-bg-card); border-color: var(--color-border)">
-        <div class="text-[12px] font-medium" style="color: var(--color-text-muted)">PO ทั้งหมด</div>
-        <div class="mt-1 text-[22px] font-semibold" style="color: var(--color-text-primary)">{{ loading ? '-' : poCount }}</div>
-        <div class="mt-1 text-[12px]" style="color: var(--color-text-muted)">เปิดอยู่: {{ loading ? '-' : poOpenCount }} | ปิดงาน: {{ loading ? '-' : poFinishedCount }}</div>
-      </div>
-      <div class="rounded-xl border p-4" style="background: var(--color-bg-card); border-color: var(--color-border)">
-        <div class="text-[12px] font-medium" style="color: var(--color-text-muted)">AP Requests ทั้งหมด</div>
-        <div class="mt-1 text-[22px] font-semibold" style="color: var(--color-text-primary)">{{ loading ? '-' : apCount }}</div>
-      </div>
-      <div class="rounded-xl border p-4" style="background: var(--color-bg-card); border-color: var(--color-border)">
-        <div class="text-[12px] font-medium" style="color: var(--color-text-muted)">สถานะ AP</div>
-        <div class="mt-1 text-[12px]" style="color: var(--color-text-muted)">
-          รอชำระ: <span style="color: #f97316">{{ loading ? '-' : apPayCount }}</span>
-          | บางส่วน: <span style="color: #f59e0b">{{ loading ? '-' : apPartialCount }}</span>
-          | จ่ายครบ: <span style="color: #22c55e">{{ loading ? '-' : apPaidCount }}</span>
+        <div class="text-[12px] font-medium" style="color: var(--color-text-muted)">PR ทั้งหมด / ติดตามงาน</div>
+        <div class="mt-1 text-[22px] font-semibold" style="color: var(--color-text-primary)">
+          {{ loading ? '-' : prCount }} / <span class="text-red-500">{{ loading ? '-' : prTrackingCount }}</span>
         </div>
+        <div class="mt-1 text-[12px]" style="color: var(--color-text-muted)">มูลค่ารวม: {{ formatNumber(prTotalAmt) }} ฿</div>
+      </div>
+      <div class="rounded-xl border p-4" style="background: var(--color-bg-card); border-color: var(--color-border)">
+        <div class="text-[12px] font-medium" style="color: var(--color-text-muted)">PO ทั้งหมด / ติดตามงาน</div>
+        <div class="mt-1 text-[22px] font-semibold" style="color: var(--color-text-primary)">
+          {{ loading ? '-' : poCount }} / <span class="text-red-500">{{ loading ? '-' : poTrackingCount }}</span>
+        </div>
+        <div class="mt-1 text-[12px]" style="color: var(--color-text-muted)">มูลค่ารวม: {{ formatNumber(poTotalAmt) }} ฿</div>
+      </div>
+      <div class="rounded-xl border p-4" style="background: var(--color-bg-card); border-color: var(--color-border)">
+        <div class="text-[12px] font-medium" style="color: var(--color-text-muted)">AP ทั้งหมด / ติดตามงาน (ยังไม่ชำระ)</div>
+        <div class="mt-1 text-[22px] font-semibold" style="color: var(--color-text-primary)">
+          {{ loading ? '-' : apCount }} / <span class="text-red-500">{{ loading ? '-' : apTrackingCount }}</span>
+        </div>
+        <div class="mt-1 text-[12px]" style="color: var(--color-text-muted)">มูลค่ารวม: {{ formatNumber(apTotalAmt) }} ฿</div>
+      </div>
+      <div class="rounded-xl border p-4" style="background: var(--color-bg-card); border-color: var(--color-border)">
+        <div class="text-[12px] font-medium" style="color: var(--color-text-muted)">PV ทั้งหมด / ติดตามงาน</div>
+        <div class="mt-1 text-[22px] font-semibold" style="color: var(--color-text-primary)">
+          {{ loading ? '-' : pvCount }} / <span class="text-red-500">{{ loading ? '-' : pvTrackingCount }}</span>
+        </div>
+        <div class="mt-1 text-[12px]" style="color: var(--color-text-muted)">มูลค่ารวม: {{ formatNumber(pvTotalAmt) }} ฿</div>
       </div>
     </div>
 
@@ -1116,28 +1218,9 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="rounded-xl border p-3" style="background: var(--color-bg-card); border-color: var(--color-border)">
-        <div class="text-[13px] font-semibold mb-3" style="color: var(--color-text-primary)">ทีมจัดซื้อ (จำนวน PR)</div>
-        <div class="overflow-x-auto">
-          <table class="w-full text-[13px]">
-            <thead>
-              <tr style="border-bottom: 1px solid var(--color-border)">
-                <th class="text-left px-3 py-2 font-medium" style="color: var(--color-text-muted)">ทีม</th>
-                <th class="text-right px-3 py-2 font-medium" style="color: var(--color-text-muted)">จำนวน</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="loading">
-                <td colspan="2" class="px-3 py-6 text-center" style="color: var(--color-text-muted)">กำลังโหลด...</td>
-              </tr>
-              <tr v-else-if="!loading && purchaseTeamTable.length === 0">
-                <td colspan="2" class="px-3 py-6 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูล</td>
-              </tr>
-              <tr v-for="row in purchaseTeamTable.slice(0, 12)" :key="row.name" style="border-bottom: 1px solid var(--color-border)">
-                <td class="px-3 py-2" style="color: var(--color-text-primary)">{{ row.name }}</td>
-                <td class="px-3 py-2 text-right font-semibold" style="color: var(--color-text-primary)">{{ formatNumber(row.n) }}</td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="text-[13px] font-semibold mb-3" style="color: var(--color-text-primary)">เปรียบเทียบจำนวนเอกสารรายเดือน (PR, PO, AP, PV)</div>
+        <div class="h-[250px]">
+          <canvas ref="monthlyComparisonBarRef"></canvas>
         </div>
       </div>
     </div>
@@ -1168,10 +1251,10 @@ onUnmounted(() => {
           <!-- thead sticky ติดด้านบนของ scroll container -->
           <thead style="position: sticky; top: 0; z-index: 10; background: var(--color-bg-card)">
             <tr style="border-bottom: 1px solid var(--color-border)">
-              <th class="text-left px-4 py-3 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">PR</th>
+              <th class="text-left px-4 py-3 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">เลข PR</th>
               <th class="text-left px-4 py-3 font-medium" style="color: var(--color-text-muted)">รายละเอียด</th>
-              <th class="text-left px-4 py-3 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">ความเร่งด่วน</th>
-              <th class="text-left px-4 py-3 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">เวลา</th>
+              <th class="text-left px-4 py-3 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">โครงการ</th>
+              <th class="text-left px-4 py-3 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">วันที่</th>
             </tr>
           </thead>
           <tbody>
@@ -1181,11 +1264,11 @@ onUnmounted(() => {
             <tr v-else-if="!loading && urgentOnlyFiltered.length === 0">
               <td colspan="4" class="px-4 py-8 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูล</td>
             </tr>
-            <tr v-for="r in urgentOnlyFiltered.slice(0, 10)" :key="r.id" class="border-b last:border-b-0" style="border-color: var(--color-border)">
-              <td class="px-4 py-3 font-semibold whitespace-nowrap" style="color: #2563eb">{{ r.pr_number || '-' }}</td>
-              <td class="px-4 py-3" style="color: var(--color-text-primary); white-space: normal; word-break: break-word">{{ r.details || '-' }}</td>
-              <td class="px-4 py-3 whitespace-nowrap" style="color: var(--color-text-secondary)">{{ r._urgent_name || '-' }}</td>
-              <td class="px-4 py-3 text-[12px] whitespace-nowrap" style="color: var(--color-text-muted)">{{ formatDateTime(r.created_at) }}</td>
+            <tr v-for="r in urgentOnlyFiltered.slice(0, 10)" :key="r.id || r.document_number" class="border-b last:border-b-0" style="border-color: var(--color-border)">
+              <td class="px-4 py-3 font-semibold whitespace-nowrap" style="color: #2563eb">{{ r.document_number || '-' }}</td>
+              <td class="px-4 py-3" style="color: var(--color-text-primary); white-space: normal; word-break: break-word">{{ r.organization || r.department || '-' }}</td>
+              <td class="px-4 py-3 whitespace-nowrap" style="color: var(--color-text-secondary)">{{ r.project || '-' }}</td>
+              <td class="px-4 py-3 text-[12px] whitespace-nowrap" style="color: var(--color-text-muted)">{{ r.issue_date || '-' }}</td>
             </tr>
           </tbody>
         </table>
@@ -1218,35 +1301,33 @@ onUnmounted(() => {
           <!-- thead sticky ติดด้านบนของ scroll container -->
           <thead style="position: sticky; top: 0; z-index: 10; background: var(--color-bg-card)">
             <tr style="border-bottom: 1px solid var(--color-border)">
-              <th class="text-left px-4 py-3 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">เลข AP</th>
+              <th class="text-left px-4 py-3 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">เลขที่เอกสาร</th>
               <th class="text-left px-4 py-3 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">เลข PO</th>
-              <th class="text-left px-4 py-3 font-medium" style="color: var(--color-text-muted)">ผู้ขาย</th>
-              <th class="text-left px-4 py-3 font-medium" style="color: var(--color-text-muted)">รายการ</th>
+              <th class="text-left px-4 py-3 font-medium" style="color: var(--color-text-muted)">ผู้ขาย/หน่วยงาน</th>
               <th class="text-right px-4 py-3 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">ยอด</th>
-              <th class="text-left px-4 py-3 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">สถานะ AP</th>
-              <th class="text-left px-4 py-3 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">เวลา</th>
+              <th class="text-left px-4 py-3 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">สถานะการชำระ</th>
+              <th class="text-left px-4 py-3 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">วันที่</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="loading">
-              <td colspan="7" class="px-4 py-8 text-center" style="color: var(--color-text-muted)">กำลังโหลดข้อมูล...</td>
+              <td colspan="6" class="px-4 py-8 text-center" style="color: var(--color-text-muted)">กำลังโหลดข้อมูล...</td>
             </tr>
             <tr v-else-if="!loading && apRecentFiltered.length === 0">
-              <td colspan="7" class="px-4 py-8 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูล</td>
+              <td colspan="6" class="px-4 py-8 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูล</td>
             </tr>
             <tr
               v-for="r in apRecentFiltered.slice(0, 10)"
-              :key="r.id"
-              class="border-b last:border-b-0 hover:bg-gray-50 dark:hover:bg-slate-700/30 transition-colors"
+              :key="r.id || r.invoice_number"
+              class="border-b last:border-b-0 hover:bg-gray-50 transition-colors"
               style="border-color: var(--color-border)"
             >
-              <td class="px-4 py-3 font-semibold whitespace-nowrap" style="color: #2563eb">{{ r.ap_number || '-' }}</td>
-              <td class="px-4 py-3 whitespace-nowrap" style="color: var(--color-text-primary)">{{ r.po_id || '-' }}</td>
-              <td class="px-4 py-3" style="color: var(--color-text-primary); white-space: normal; word-break: break-word">{{ r.supplier_name || '-' }}</td>
-              <td class="px-4 py-3" style="color: var(--color-text-primary); white-space: normal; word-break: break-word">{{ r.item_ref || '-' }}</td>
-              <td class="px-4 py-3 text-right whitespace-nowrap" style="color: var(--color-text-primary)">{{ moneyText(r.total_price, r.currency_name) }}</td>
-              <td class="px-4 py-3 whitespace-nowrap" style="color: var(--color-text-secondary)">{{ r.ap_status || '-' }}</td>
-              <td class="px-4 py-3 text-[12px] whitespace-nowrap" style="color: var(--color-text-muted)">{{ formatDateTime(r.created_at) }}</td>
+              <td class="px-4 py-3 font-semibold whitespace-nowrap" style="color: #2563eb">{{ r.invoice_number || r.document_number || '-' }}</td>
+              <td class="px-4 py-3 whitespace-nowrap" style="color: var(--color-text-primary)">{{ r.po || '-' }}</td>
+              <td class="px-4 py-3" style="color: var(--color-text-primary); white-space: normal; word-break: break-word">{{ r.organization || '-' }}</td>
+              <td class="px-4 py-3 text-right whitespace-nowrap" style="color: var(--color-text-primary)">{{ moneyText(r.grand_total, r.currency) }}</td>
+              <td class="px-4 py-3 whitespace-nowrap" style="color: var(--color-text-secondary)">{{ r.payment_status || '-' }}</td>
+              <td class="px-4 py-3 text-[12px] whitespace-nowrap" style="color: var(--color-text-muted)">{{ r.issue_date || '-' }}</td>
             </tr>
           </tbody>
         </table>

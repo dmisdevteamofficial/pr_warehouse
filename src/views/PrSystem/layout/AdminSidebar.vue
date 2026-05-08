@@ -18,14 +18,17 @@ const formSubmitOpen = ref(false)
 const menuItems = [
   { id: "/#/dashboard", icon: "fa-house", label: "แดชบอร์ด" },
   {
-    id: "/#/pr_list",
+    id: "/#/pr_section",
     icon: "fa-file-lines",
-    label: "รายการ PR",
-    selectable: true,
+    label: "ทีมจัดชื่อ",
     children: [
-      { id: "/#/pr_history", icon: "fa-clock-rotate-left", label: "ประวัติทั้งหมด" },
+      { id: "/#/pr_list", icon: "fa-list-check", label: "รายการ PR" },
+      { id: "/#/pr_po", icon: "fa-file-invoice-dollar", label: "รายการ PO" },
+      { id: "/#/pr_ap", icon: "fa-file-invoice", label: "รายการ AP" },
+      { id: "/#/pr_pv", icon: "fa-money-check-dollar", label: "รายการ PV" },
     ],
   },
+  { id: "/#/pr_history", icon: "fa-clock-rotate-left", label: "ประวัติทั้งหมด" },
   {
     id: "/#/system_admins",
     icon: "fa-user-shield",
@@ -74,7 +77,7 @@ function selectItem(item) {
 function getSectionKey(item) {
   const id = (item?.id ?? "").toString()
   if (id.includes("system_admins")) return "system_admins"
-  if (id.includes("pr_list")) return "pr_list"
+  if (id.includes("pr_section") || id.includes("pr_list")) return "pr_list"
   if (id.includes("form_submit") || id.includes("form_")) return "form_submit"
   return ""
 }

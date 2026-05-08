@@ -108,9 +108,9 @@ async function fetchRows() {
     const { data, error } = await q
     if (error) throw error
     rows.value = data || []
-    if (activeRowId.value == null && rows.value.length) {
-      activeRowId.value = rows.value[0]?.id ?? null
-    }
+    // if (activeRowId.value == null && rows.value.length) {
+    //   activeRowId.value = rows.value[0]?.id ?? null
+    // }
     await fetchStatuses()
   } catch (err) {
     alert('โหลดข้อมูลไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'))
@@ -172,8 +172,15 @@ const slipHeaderText = computed(() => {
 })
 
 function selectRow(id) {
-  activeRowId.value = id
-  messageDirty.value = false
+  if (activeRowId.value === id) {
+    // ติ๊กซ้ำ = ยกเลิก
+    activeRowId.value = null
+    messageDirty.value = false
+    editableText.value = ''
+  } else {
+    activeRowId.value = id
+    messageDirty.value = false
+  }
 }
 
 // status ของ mode ปัจจุบัน
@@ -351,6 +358,10 @@ watch(
   () => generatedMessageText.value,
   (text) => {
     if (messageDirty.value) return
+    if (activeRowId.value == null) {
+      editableText.value = ''
+      return
+    }
     editableText.value = text || ''
   },
   { immediate: true }
