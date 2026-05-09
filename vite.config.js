@@ -1,9 +1,17 @@
+// =============================================================
+// vite.config.js — Dev proxy สำหรับ TRCLOUD (ใช้ตอน vite dev เท่านั้น)
+// Production ใช้ functions/trcloud-api/[[path]].js แทน
+// =============================================================
+
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { fileURLToPath, URL } from 'node:url'
 import https from 'node:https'
 import querystring from 'node:querystring'
 
+/**
+ * Login TRCLOUD แล้วคืน cookie string
+ */
 function trcloudLogin(username, password) {
   return new Promise((resolve, reject) => {
     const postData = querystring.stringify({ username, password, cmd: 'login' })
@@ -18,8 +26,8 @@ function trcloudLogin(username, password) {
         'X-Requested-With': 'XMLHttpRequest',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
         Origin: 'https://thaidrill.trcloud.co',
-        Referer: 'https://thaidrill.trcloud.co/application/'
-      }
+        Referer: 'https://thaidrill.trcloud.co/application/',
+      },
     }
 
     const req = https.request(options, (res) => {
@@ -39,7 +47,9 @@ function trcloudLogin(username, password) {
   })
 }
 
-/** Merge two cookie header strings into one (later wins per key). */
+/**
+ * Merge two cookie header strings — key ที่ซ้ำกัน ตัวหลังชนะ
+ */
 function mergeCookieHeaders(a, b) {
   const cookieMap = new Map()
   ;[a, b]
@@ -55,19 +65,27 @@ function mergeCookieHeaders(a, b) {
 
 export default defineConfig(async ({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
+
   const useTrcloudLoginCookie = env.TRCLOUD_USE_LOGIN_COOKIE === 'true'
   const staticCookie = (env.TRCLOUD_COOKIE || '').trim()
 
   let trcloudCookie = staticCookie
 
+  // --- เลือก cookie ที่จะใช้ ---
   if (useTrcloudLoginCookie) {
     try {
       trcloudCookie = await trcloudLogin(env.TRCLOUD_USERNAME, env.TRCLOUD_PASSWORD)
-      console.log('🍪 Cookie (login):', trcloudCookie.slice(0, 80) + (trcloudCookie.length > 80 ? '…' : ''))
+      console.log(
+        '🍪 Cookie (login):',
+        trcloudCookie.slice(0, 80) + (trcloudCookie.length > 80 ? '…' : '')
+      )
     } catch (err) {
       console.error('❌ TRCloud Login Error:', err.message)
       if (!staticCookie) {
         console.warn('⚠️ ไม่มี TRCLOUD_COOKIE สำรอง — proxy จะไม่ส่ง session')
+      } else {
+        console.warn('⚠️ ใช้ TRCLOUD_COOKIE จาก .env แทน')
+        trcloudCookie = staticCookie
       }
     }
   } else if (staticCookie) {
@@ -78,18 +96,23 @@ export default defineConfig(async ({ mode }) => {
 
   return {
     plugins: [vue()],
+
     resolve: {
       alias: {
-        '@': fileURLToPath(new URL('./src', import.meta.url))
-      }
+        '@': fileURLToPath(new URL('./src', import.meta.url)),
+      },
     },
+
     server: {
       proxy: {
+        // Dev proxy: /trcloud-api/* → https://thaidrill.trcloud.co/*
         '/trcloud-api': {
           target: 'https://thaidrill.trcloud.co',
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/trcloud-api/, ''),
+
           configure: (proxy) => {
+            // รับ cookie ใหม่จาก TRCLOUD แล้ว merge เข้า session
             proxy.on('proxyRes', (proxyRes) => {
               const setCookie = proxyRes.headers['set-cookie']
               if (setCookie) {
@@ -98,22 +121,29 @@ export default defineConfig(async ({ mode }) => {
               }
             })
 
+            // ติด cookie + headers ก่อนส่งต่อไป TRCLOUD
             proxy.on('proxyReq', (proxyReq, req) => {
               proxyReq.removeHeader('cookie')
+
               const clientCookie = String(req.headers['x-trcloud-cookie'] || '').trim()
               proxyReq.removeHeader('x-trcloud-cookie')
-              const cookieToSend = clientCookie || trcloudCookie
+
+              const cookieToSend = clientCookie
+                ? mergeCookieHeaders(trcloudCookie, clientCookie)
+                : trcloudCookie
+
               if (cookieToSend) {
                 proxyReq.setHeader('Cookie', cookieToSend)
               }
+
               proxyReq.setHeader('X-Requested-With', 'XMLHttpRequest')
               proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
               proxyReq.setHeader('Origin', 'https://thaidrill.trcloud.co')
               proxyReq.setHeader('Referer', 'https://thaidrill.trcloud.co/application/')
             })
-          }
-        }
-      }
-    }
+          },
+        },
+      },
+    },
   }
 })
