@@ -28,8 +28,13 @@ export async function onRequest(context) {
   newHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
 
   // จัดการเรื่อง Cookie
-  // ถ้ามี Cookie ส่งมาจาก Client (Browser) ผ่าน header x-trcloud-cookie ให้เอามาใช้
-  const clientCookie = request.headers.get('x-trcloud-cookie');
+  // 1. ดึงจาก Header x-trcloud-cookie (ส่งมาจาก Client/Browser)
+  // 2. ถ้าไม่มี ให้ดึงจาก Environment Variable TRCLOUD_COOKIE (ตั้งค่าใน Cloudflare Dashboard)
+  let clientCookie = request.headers.get('x-trcloud-cookie');
+  if (!clientCookie && context.env && context.env.TRCLOUD_COOKIE) {
+    clientCookie = context.env.TRCLOUD_COOKIE;
+  }
+
   if (clientCookie) {
     newHeaders.set('Cookie', clientCookie);
     newHeaders.delete('x-trcloud-cookie');

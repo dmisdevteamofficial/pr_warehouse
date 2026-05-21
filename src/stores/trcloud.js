@@ -272,11 +272,11 @@ export const useTrcloudStore = defineStore('trcloud', () => {
     console.log(`Starting fetch for ${type}...`)
     const requestPromise = (async () => {
       try {
-      const companyId = (import.meta.env.VITE_TRCLOUD_COMPANY_ID || '').trim()
-      const passkey = (import.meta.env.VITE_TRCLOUD_PASSKEY || '').trim()
+      const companyId = (import.meta.env.VITE_TRCLOUD_COMPANY_ID || '25').trim()
+      const passkey = (import.meta.env.VITE_TRCLOUD_PASSKEY || '6a05946b357765415b4c931d2122a8c8').trim()
       
       if (!companyId || !passkey) {
-        console.error('TRCLOUD API Credentials missing! Please check your VITE_TRCLOUD_COMPANY_ID and VITE_TRCLOUD_PASSKEY in .env file.')
+        console.error('TRCLOUD API Credentials missing!')
         return
       }
 
@@ -331,6 +331,14 @@ export const useTrcloudStore = defineStore('trcloud', () => {
         let pageResults = []
         let endpointTotal = null
 
+        // Determine if this specific endpoint needs JSON payload
+        let currentUseJson = useJson
+        if (selectedEndpoint.includes('_search_keyword.php')) {
+          currentUseJson = false
+        } else if (selectedEndpoint.includes('invoice_list.php') || selectedEndpoint.includes('po_list.php')) {
+          currentUseJson = true
+        }
+
         while (true) {
           const payload = {
             company_id: companyId,
@@ -363,17 +371,11 @@ export const useTrcloudStore = defineStore('trcloud', () => {
             type: docType
           }
 
-          // Special-case: when fetching AP via invoice_list.php, use the specific
-          // dataset/payload required for item-level extraction (provided by user).
-          // This payload will still use the configured env companyId/passkey when available,
-          // otherwise falls back to the values from the request.
           let finalPayload = payload
           if (type === 'ap' && String(selectedEndpoint || '').toLowerCase().includes('invoice_list.php')) {
-            // Build payload to match TRCloud's invoice_list.php expectations.
-            // Use env company/passkey when present; fall back to supplied constants.
             finalPayload = {
-              company_id: companyId || '25',
-              passkey: passkey || '6a05946b357765415b4c931d2122a8c8',
+              company_id: companyId,
+              passkey: passkey,
               from: dateFrom.value,
               to: dateTo.value,
               date_type: 'issue_date',
@@ -388,20 +390,12 @@ export const useTrcloudStore = defineStore('trcloud', () => {
               keyword: '',
               start: page
             }
-            // invoice_list.php requires a form param `json=<payload>`
-            // (we already set useJson = true for AP above)
           }
 
-          let body = useJson
-            ? new URLSearchParams({ json: JSON.stringify(finalPayload) })
-            : new URLSearchParams(finalPayload)
-
-          // Special-case: PO list payload expected by /engine-po/po_list.php
           if (type === 'po' && String(selectedEndpoint || '').toLowerCase().includes('po_list.php')) {
-            // Build payload to match TRCloud's PO report expectations.
             finalPayload = {
-              company_id: companyId || '25',
-              passkey: passkey || '6a05946b357765415b4c931d2122a8c8',
+              company_id: companyId,
+              passkey: passkey,
               from: dateFrom.value,
               to: dateTo.value,
               status_new: 1,
@@ -421,10 +415,11 @@ export const useTrcloudStore = defineStore('trcloud', () => {
               keyword: '',
               start: page
             }
-            // ensure body uses json=...
-            // overwrite body variable
-            body = new URLSearchParams({ json: JSON.stringify(finalPayload) })
           }
+
+          const body = currentUseJson
+            ? new URLSearchParams({ json: JSON.stringify(finalPayload) })
+            : new URLSearchParams(finalPayload)
 
           const url = `/trcloud-api${selectedEndpoint}`
           const response = await fetch(url, {
