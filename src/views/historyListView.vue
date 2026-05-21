@@ -41,49 +41,51 @@ const purposeOptions = [
 async function fetchData() {
   loading.value = true
   try {
-    const [{ data: ordersData, error: ordersError }, { data: txData, error: txError }] = await Promise.all([
-      supabase
-        .from('order_req')
-        .select(`
-          id,
-          request_id,
-          created_at,
-          created_by,
-          amount,
-          unit,
-          note,
-          remark,
-          status,
-          updated_at,
-          updated_by,
-          mr_number,
-          company,
-          fixed_bill_number,
-          metter_hour,
-          metter_kilometter,
-          withdraw_purpose,
-          receive_by,
-          inspector_by,
-          is_return,
-          items(item_code,item_name,unit),
-          category(category_name),
-          requester:system_users!created_by(fullname, position, department, emp_code),
-          approver:system_users!updated_by(fullname, emp_code)
-        `)
-        .eq('status', 'completed')
-        .order('updated_at', { ascending: false }),
-      supabase
-        .from('transactions')
-        .select('order_id, amount, unit, return_date, created_at, created_by')
-        .order('created_at', { ascending: false })
-    ])
+    // ดึง order_req data พร้อม relationships
+    const { data: ordersData, error: ordersError } = await supabase
+      .from('order_req')
+      .select(`
+        *,
+        item_id(id,item_code,item_name,unit)
+      `)
+      .order('updated_at', { ascending: false })
 
     if (ordersError) throw ordersError
+
+    // ดึง transactions data
+    const { data: txData, error: txError } = await supabase
+      .from('transactions')
+      .select('order_id, amount, unit, return_date, created_at, created_by')
+      .order('created_at', { ascending: false })
+
     if (txError) throw txError
 
-    orders.value = ordersData || []
+    // ดึง users data
+    const userIds = [...new Set(ordersData?.flatMap(o => [o.created_by, o.updated_by]).filter(Boolean) || [])]
+    const { data: usersData, error: usersError } = userIds.length > 0
+      ? await supabase
+          .from('system_users')
+          .select('id, fullname, position, department, emp_code')
+          .in('id', userIds)
+      : { data: [], error: null }
+
+    if (usersError) throw usersError
+
+    // สร้าง lookup map สำหรับ users
+    const usersMap = Object.fromEntries(usersData?.map(u => [u.id, u]) || [])
+
+    // Merge ข้อมูลเข้าด้วยกัน
+    const mergedData = ordersData?.map(order => ({
+      ...order,
+      requester: usersMap[order.created_by] || null,
+      approver: usersMap[order.updated_by] || null
+    })) || []
+
+    orders.value = mergedData
     transactions.value = txData || []
+    console.log('✅ โหลดข้อมูลสำเร็จ:', mergedData.length, 'orders')
   } catch (err) {
+    console.error('❌ Error loading data:', err)
     alert('โหลดประวัติการเบิกไม่สำเร็จ: ' + err.message)
   } finally {
     loading.value = false
@@ -154,7 +156,7 @@ function buildHistoryGroups(rows) {
     const key = row.request_id ? `request-${row.request_id}` : `single-${row.id}`
     const tx = txByOrderId(row.id)
     const actualAmount = Number(tx?.amount ?? row.amount ?? 0)
-    const actualUnit = tx?.unit || row.unit || row.items?.unit || ''
+    const actualUnit = tx?.unit || row.unit || row.item_id?.unit || ''
 
     if (!groups[key]) {
       groups[key] = {
@@ -183,8 +185,8 @@ function buildHistoryGroups(rows) {
 
     groups[key].items.push({
       id: row.id,
-      itemCode: row.items?.item_code || '-',
-      itemName: row.items?.item_name || '-',
+      itemCode: row.item_id?.item_code || '-',
+      itemName: row.item_id?.item_name || '-',
       amount: actualAmount,
       unit: actualUnit,
       note: row.note || '',
@@ -294,7 +296,7 @@ function buildHistoryGroupFromRows(rows, txRows) {
     const key = row.request_id ? `request-${row.request_id}` : `single-${row.id}`
     const tx = txLookup(row.id)
     const actualAmount = Number(tx?.amount ?? row.amount ?? 0)
-    const actualUnit = tx?.unit || row.unit || row.items?.unit || ''
+    const actualUnit = tx?.unit || row.unit || row.item_id?.unit || ''
 
     if (!groups[key]) {
       groups[key] = {
@@ -323,8 +325,8 @@ function buildHistoryGroupFromRows(rows, txRows) {
 
     groups[key].items.push({
       id: row.id,
-      itemCode: row.items?.item_code || '-',
-      itemName: row.items?.item_name || '-',
+      itemCode: row.item_id?.item_code || '-',
+      itemName: row.item_id?.item_name || '-',
       amount: actualAmount,
       unit: actualUnit,
       note: row.note || '',
@@ -421,33 +423,10 @@ async function processHistoryBarcodeInput(code) {
       const { data: ordersData, error: ordersError } = await supabase
         .from('order_req')
         .select(`
-          id,
-          request_id,
-          created_at,
-          created_by,
-          amount,
-          unit,
-          note,
-          remark,
-          status,
-          updated_at,
-          updated_by,
-          mr_number,
-          company,
-          fixed_bill_number,
-          metter_hour,
-          metter_kilometter,
-          withdraw_purpose,
-          receive_by,
-          inspector_by,
-          is_return,
-          items(item_code,item_name,unit),
-          category(category_name),
-          requester:system_users!created_by(fullname, position, department, emp_code),
-          approver:system_users!updated_by(fullname, emp_code)
+          *,
+          item_id(id,item_code,item_name,unit)
         `)
         .eq('request_id', requestId)
-        .eq('status', 'completed')
         .order('updated_at', { ascending: false })
 
       if (ordersError) throw ordersError
@@ -465,7 +444,28 @@ async function processHistoryBarcodeInput(code) {
 
       if (txError) throw txError
 
-      const built = buildHistoryGroupFromRows(ordersData, txData || [])
+      // ดึง users data
+      const userIds = [...new Set(ordersData?.flatMap(o => [o.created_by, o.updated_by]).filter(Boolean) || [])]
+      const { data: usersData, error: usersError } = userIds.length > 0
+        ? await supabase
+            .from('system_users')
+            .select('id, fullname, position, department, emp_code')
+            .in('id', userIds)
+        : { data: [], error: null }
+
+      if (usersError) throw usersError
+
+      // สร้าง lookup map สำหรับ users
+      const usersMap = Object.fromEntries(usersData?.map(u => [u.id, u]) || [])
+
+      // Merge ข้อมูลเข้าด้วยกัน
+      const mergedData = ordersData?.map(order => ({
+        ...order,
+        requester: usersMap[order.created_by] || null,
+        approver: usersMap[order.updated_by] || null
+      })) || []
+
+      const built = buildHistoryGroupFromRows(mergedData, txData || [])
       group = built[0] || null
     }
 

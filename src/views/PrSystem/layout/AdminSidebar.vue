@@ -20,27 +20,31 @@ const menuItems = [
   {
     id: "/#/pr_section",
     icon: "fa-file-lines",
-    label: "ทีมจัดชื่อ",
+    label: "ข้อมูลรายละเอียด",
+    isTimeline: true,
     children: [
-      { id: "/#/pr_list", icon: "fa-list-check", label: "รายการ PR" },
-      { id: "/#/pr_po", icon: "fa-file-invoice-dollar", label: "รายการ PO" },
-      { id: "/#/pr_ap", icon: "fa-file-invoice", label: "รายการ AP" },
-      { id: "/#/pr_pv", icon: "fa-money-check-dollar", label: "รายการ PV" },
+      { id: "/#/pr_list", icon: "fa-list-check", label: "รายการ [PR]" },
+      { id: "/#/pr_po", icon: "fa-file-invoice-dollar", label: "รายการ [PO]" },
+      { id: "/#/pr_po_items", icon: "fa-boxes-stacking", label: "รายการ [PO (สินค้า)]" },
+      { id: "/#/pr_ap", icon: "fa-file-invoice", label: "รายการ [AP]" },
+      { id: "/#/pr_ap_items", icon: "fa-boxes-packing", label: "รายการ [AP (สินค้า)]" },
+      { id: "/#/pr_trcloud", icon: "fa-layer-group", label: "เอกสาร TRCloud" },
+      { id: "/#/pr_pv", icon: "fa-money-check-dollar", label: "รายการ [PV]" },
+      { id: "/#/pr_history", icon: "fa-clipboard-check", label: "การเชื่อมโยง" },
     ],
   },
-  { id: "/#/pr_history", icon: "fa-clipboard-check", label: "สถานะ PR-PO-AP-PV" },
-  {
-    id: "/#/system_admins",
-    icon: "fa-user-shield",
-    label: "สถานะรายการ",
-    children: [
-      { id: "/#/system_admins_purchase", icon: "fa-bolt", label: "รายการความเร่งด่วน" },
-      { id: "/#/system_admins_receive", icon: "fa-people-group", label: "รายการทีมจัดซื้อ" },
-      { id: "/#/system_admins_accept", icon: "fa-clipboard-check", label: "สถานะรับงาน" },
-      { id: "/#/system_admins_store", icon: "fa-store", label: "ร้านค้า" },
-      { id: "/#/system_admins_inspect", icon: "fa-magnifying-glass", label: "ตรวจสอบสินค้า" },
-    ],
-  },
+  // {
+  //   id: "/#/system_admins",
+  //   icon: "fa-user-shield",
+  //   label: "สถานะรายการ",
+  //   children: [
+  //     { id: "/#/system_admins_purchase", icon: "fa-bolt", label: "รายการความเร่งด่วน" },
+  //     { id: "/#/system_admins_receive", icon: "fa-people-group", label: "รายการทีมจัดซื้อ" },
+  //     { id: "/#/system_admins_accept", icon: "fa-clipboard-check", label: "สถานะรับงาน" },
+  //     { id: "/#/system_admins_store", icon: "fa-store", label: "ร้านค้า" },
+  //     { id: "/#/system_admins_inspect", icon: "fa-magnifying-glass", label: "ตรวจสอบสินค้า" },
+  //   ],
+  // },
   {
     id: "/#/form_appo",
     icon: "fa-paper-plane",
@@ -195,9 +199,15 @@ const closeMobile = () => {
               </li>
             </div>
 
-            <div v-if="isSectionOpen(item)" :class="collapsed ? 'mt-1' : 'mt-1 ml-3 pl-2 border-l border-gray-200 dark:border-gray-800'">
+            <div 
+              v-if="isSectionOpen(item)" 
+              :class="[
+                collapsed ? 'mt-1' : 'mt-1 ml-3 pl-2',
+                !item.isTimeline && !collapsed ? 'border-l border-gray-200 dark:border-gray-800' : ''
+              ]"
+            >
               <div
-                v-for="child in item.children"
+                v-for="(child, index) in item.children"
                 :key="child.id"
                 @click="selectItem(child)"
               >
@@ -206,6 +216,9 @@ const closeMobile = () => {
                   :label="child.label"
                   :active="props.activeItemId === child.id"
                   :collapsed="collapsed"
+                  :isStep="item.isTimeline"
+                  :isFirstStep="index === 0"
+                  :isLastStep="index === item.children.length - 1"
                 />
               </div>
             </div>

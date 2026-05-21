@@ -19,7 +19,10 @@ import LineView from "./Views/lineView.vue"
 import PrView from "./Views/prView.vue"
 import PoView from "./Views/poView.vue"
 import ApView from "./Views/apView.vue"
+import TrcloudApItemsView from "./Views/trcloudApItemsView.vue"
+import TrcloudPoItemsView from "./Views/trcloudPoItemsView.vue"
 import PvView from "./Views/pvView.vue"
+import TrcloudDocsView from "./Views/trcloudDocsView.vue"
 import PrpoappvView from "./Views/prpoappvView.vue"
 
 const auth = useAuthStore()
@@ -41,6 +44,9 @@ const selectionOptions = [
   { itemId: "/#/pr_list", itemLabel: "รายการ PR" },
   { itemId: "/#/pr_po", itemLabel: "รายการ PO" },
   { itemId: "/#/pr_ap", itemLabel: "รายการ AP" },
+  { itemId: "/#/pr_po_items", itemLabel: "รายการ PO (สินค้า)" },
+  { itemId: "/#/pr_ap_items", itemLabel: "รายการ AP (สินค้า)" },
+  { itemId: "/#/pr_trcloud", itemLabel: "เอกสาร TRCloud" },
   { itemId: "/#/pr_pv", itemLabel: "รายการ PV" },
   { itemId: "/#/pr_history", itemLabel: "ประวัติทั้งหมด" },
   { itemId: "/#/form_submit", itemLabel: "ฟอมร์ส่งรายการ" },
@@ -80,8 +86,11 @@ const activePage = computed(() => {
   const id = (selection.value.itemId ?? "").toString()
   if (id.includes("dashboard")) return "dashboard"
   if (id.includes("pr_list")) return "pr_list"
+  if (id.includes("pr_po_items")) return "pr_po_items"
   if (id.includes("pr_po")) return "pr_po"
+  if (id.includes("pr_ap_items")) return "pr_ap_items"
   if (id.includes("pr_ap")) return "pr_ap"
+  if (id.includes("pr_trcloud")) return "pr_trcloud"
   if (id.includes("pr_pv")) return "pr_pv"
   if (id.includes("pr_history")) return "pr_history"
   if (id.includes("system_admins_purchase")) return "system_admins_purchase"
@@ -183,13 +192,25 @@ const onLogout = () => {
         <JobStatusView v-else-if="activePage === 'system_admins_accept'" />
         <StoreView v-else-if="activePage === 'system_admins_store'" />
         <PurchaseView v-else-if="activePage === 'system_admins_inspect'" />
-        <AppoView v-else-if="activePage === 'form_appo'" :editId="editApRequestId" @edited="onEditedApRequest" @cancelEdit="onCancelEditApRequest" />
+        <AppoView 
+  v-else-if="activePage === 'form_appo'" 
+  :editId="editApRequestId" 
+  @edited="onEditedApRequest" 
+  @cancelEdit="onCancelEditApRequest"
+  @selectPage="onSelect" 
+/>
         <TrackingView v-else-if="activePage === 'form_tracking'" :refreshKey="trackingRefreshKey" @editRow="onEditApRequest" />
         <SlipView v-else-if="activePage === 'form_slip_match'" />
         <LineView v-else-if="activePage === 'form_line_message'" />
         <PrView v-else-if="activePage === 'pr_list'" />
         <PoView v-else-if="activePage === 'pr_po'" />
         <ApView v-else-if="activePage === 'pr_ap'" />
+        <TrcloudPoItemsView v-else-if="activePage === 'pr_po_items'" />
+        <TrcloudApItemsView 
+          v-else-if="activePage === 'pr_ap_items'" 
+          @selectPage="onSelect" 
+        />
+        <TrcloudDocsView v-else-if="activePage === 'pr_trcloud'" />
         <PvView v-else-if="activePage === 'pr_pv'" />
         <PrpoappvView v-else-if="activePage === 'pr_history'" />
         <div

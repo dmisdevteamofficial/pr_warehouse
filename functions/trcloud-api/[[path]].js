@@ -14,7 +14,16 @@ export async function onRequest(context) {
   
   // ตั้งค่า headers ที่จำเป็นสำหรับ TRCloud
   newHeaders.set('Origin', 'https://thaidrill.trcloud.co');
-  newHeaders.set('Referer', 'https://thaidrill.trcloud.co/application/');
+  const pathLower = path.toLowerCase();
+  let referer = 'https://thaidrill.trcloud.co/application/';
+  if (pathLower.includes('invoice_list.php')) {
+    referer = 'https://thaidrill.trcloud.co/application/expense_report/invoice_list.php';
+  } else if (pathLower.includes('invoice_by_supplier.php')) {
+    referer = 'https://thaidrill.trcloud.co/application/expense_report/invoice_by_supplier.php';
+  } else if (pathLower.includes('/engine-po/') || pathLower.includes('/engine-pr/') || pathLower.includes('/engine-expense/')) {
+    referer = 'https://thaidrill.trcloud.co/application/expense/';
+  }
+  newHeaders.set('Referer', referer);
   newHeaders.set('X-Requested-With', 'XMLHttpRequest');
   newHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
 

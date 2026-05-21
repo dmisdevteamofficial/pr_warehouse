@@ -2,9 +2,11 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { supabase, supabaseEmployee } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
+import { useTrcloudStore } from '@/stores/trcloud'
 
 const auth = useAuthStore()
-const emit = defineEmits(['edited', 'cancelEdit'])
+const trcloudStore = useTrcloudStore()
+const emit = defineEmits(['edited', 'cancelEdit', 'selectPage'])
 const props = defineProps({
   editId: { type: [Number, String], default: null },
 })
@@ -69,30 +71,31 @@ async function fetchDepartmentOptions() {
 async function fetchApNumberOptions() {
   apSearching.value = true
   try {
-    const out = []
-    const batchSize = 1000
-    const maxRows = 5000
-    let from = 0
-    while (from < maxRows) {
-      const { data, error } = await supabase
-        .from('purchasing_order')
-        .select('ap_number')
-        .not('ap_number', 'is', null)
-        .order('ap_number', { ascending: true })
-        .range(from, from + batchSize - 1)
+    // Ensure stores are ready
+    const fetchPromises = []
+    if (!trcloudStore.apRows.length) fetchPromises.push(trcloudStore.fetchTrcloudData('ap'))
+    if (!trcloudStore.poRows.length) fetchPromises.push(trcloudStore.fetchTrcloudData('po'))
+    if (!trcloudStore.prRows.length) fetchPromises.push(trcloudStore.fetchTrcloudData('pr'))
+    
+    if (fetchPromises.length) await Promise.all(fetchPromises)
 
-      if (error) throw error
-      const list = data || []
-      for (const r of list) {
-        const v = String(r?.ap_number || '').trim()
-        if (!v) continue
-        out.push(v)
-      }
-      if (list.length < batchSize) break
-      from += batchSize
-    }
-    apNumberOptions.value = out
-  } catch {
+    // Combine items from AP, PO, and PR
+    const allItems = [
+      ...(trcloudStore.apItemRows || []).map(r => ({ doc: r.doc_number || r.invoice_number, item: r.item_name, type: 'AP' })),
+      ...(trcloudStore.poItemRows || []).map(r => ({ doc: r.doc_number || r.invoice_number, item: r.item_name, type: 'PO' })),
+      ...(trcloudStore.prItemRows || []).map(r => ({ doc: r.doc_number || r.invoice_number, item: r.item_name, type: 'PR' }))
+    ]
+
+    const out = allItems.map(r => {
+      const doc = r.doc || '-'
+      const item = r.item || '-'
+      return `${doc} | ${item} [${r.type}]`
+    }).filter(Boolean)
+    
+    // Unique and Sort
+    apNumberOptions.value = [...new Set(out)].sort()
+  } catch (err) {
+    console.error('Fetch TRCloud options failed:', err)
     apNumberOptions.value = []
   } finally {
     apSearching.value = false
@@ -152,92 +155,123 @@ function userNameText(u) {
   return u.emp_code ? `${u.fullname} (${u.emp_code})` : u.fullname || u.username || '-'
 }
 
-async function fetchApAutofill(apNumber) {
-  const ap = String(apNumber || '').trim()
+async function fetchApAutofill(apIdentity) {
+  const identity = String(apIdentity || '').trim()
   apInfoError.value = ''
   apInfo.value = null
-  if (!ap) return
+  if (!identity) return
 
   apInfoLoading.value = true
   try {
-    const { data: orderRow, error: orderError } = await supabase
-      .from('purchasing_order')
-      .select('id, pr_id, ap_number, lao_po_number, store_by, created_by, created_at, updated_at')
-      .eq('ap_number', ap)
-      .order('updated_at', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    // Parse "Doc Number | Item Name [TYPE]"
+    // Example: "AP20260517-001 | Some Product [AP]"
+    const typeMatch = identity.match(/\[(AP|PO|PR)\]$/)
+    const type = typeMatch ? typeMatch[1] : null
+    
+    let cleanIdentity = identity
+    if (type) {
+      cleanIdentity = identity.replace(` [${type}]`, '')
+    }
 
-    if (orderError) throw orderError
-    if (!orderRow) {
-      apInfoError.value = 'ไม่พบข้อมูล AP นี้ในตาราง purchasing_order'
+    const [docNum, ...itemParts] = cleanIdentity.split(' | ')
+    const itemName = itemParts.join(' | ')
+
+    // 1. Search in the corresponding TRCloud store based on type (or all if type unknown)
+    let trcloudItem = null
+    
+    const searchInAp = () => trcloudStore.apItemRows.find(r => (r.doc_number === docNum || r.invoice_number === docNum) && r.item_name === itemName)
+    const searchInPo = () => trcloudStore.poItemRows.find(r => (r.doc_number === docNum || r.invoice_number === docNum) && r.item_name === itemName)
+    const searchInPr = () => trcloudStore.prItemRows.find(r => (r.doc_number === docNum || r.invoice_number === docNum) && r.item_name === itemName)
+
+    if (type === 'AP') trcloudItem = searchInAp()
+    else if (type === 'PO') trcloudItem = searchInPo()
+    else if (type === 'PR') trcloudItem = searchInPr()
+    else {
+      // Fallback: search all
+      trcloudItem = searchInAp() || searchInPo() || searchInPr()
+    }
+
+    if (trcloudItem) {
+      console.log('Found TRCloud Item:', trcloudItem)
+      const poDateIso = isoDateFromAny(trcloudItem.issue_date)
+      
+      // 1. เลขที่ AP (จากหน้า trcloudApItemsView.vue ตาราง เลขที่เอกสาร)
+      form.value.ap_number = type === 'AP' ? (trcloudItem.doc_number || trcloudItem.invoice_number || '') : ''
+      
+      // 2. เลขที่ PO และคนเปิด PO (Staff จากหน้า poView.vue)
+      let poId = type === 'PO' ? (trcloudItem.doc_number || trcloudItem.invoice_number || '') : (trcloudItem.ref_po || '')
+      let staff = trcloudItem.staff || ''
+      
+      // ค้นหาข้อมูลจากรายการ PO เพื่อให้ได้ Staff ที่ถูกต้อง (ถ้าเลือก AP มา)
+      if (type === 'AP' || !staff) {
+        const relatedPo = trcloudStore.poItemRows.find(p => {
+          const isSameDoc = poId && (p.doc_number === poId || p.invoice_number === poId)
+          const isSameItem = p.item_name === trcloudItem.item_name
+          return isSameDoc || (isSameItem && p.organization === trcloudItem.organization)
+        })
+        
+        if (relatedPo) {
+          if (!poId) poId = relatedPo.doc_number || relatedPo.invoice_number || ''
+          staff = relatedPo.staff || ''
+        }
+      }
+      form.value.po_id = poId
+      form.value.po_created_by = staff
+
+      // 3. จำนวนสั่ง
+      const rawQty = trcloudItem.quantity || trcloudItem.qty || 0
+      form.value.qty_order = !isNaN(parseFloat(rawQty)) ? parseFloat(rawQty) : null
+      
+      // 4. แผนกที่ขอ (ดึงมาจากรายการ PR ที่เกี่ยวข้อง)
+      let dept = trcloudItem.department || trcloudItem.department_name || ''
+      
+      // ถ้าไม่มีแผนกในตัวรายการเอง ให้พยายามค้นหาข้ามไปที่ PR
+      if (!dept) {
+        const targetItemName = String(trcloudItem.item_name || '').trim().toLowerCase()
+        
+        // ค้นหาจากรายการ PR ที่มีชื่อสินค้าตรงกัน (แบบไม่สนช่องว่างและตัวพิมพ์เล็กใหญ่)
+        const relatedPr = trcloudStore.prItemRows.find(p => {
+          const prItemName = String(p.item_name || '').trim().toLowerCase()
+          return prItemName === targetItemName && targetItemName !== ''
+        })
+        
+        if (relatedPr) {
+          dept = relatedPr.department || relatedPr.department_name || relatedPr.project || ''
+        }
+      }
+      
+      // เพิ่มแผนกใหม่เข้าไปในตัวเลือกถ้ายังไม่มี เพื่อให้ <select> แสดงผลได้
+      if (dept && !departmentOptions.value.includes(dept)) {
+        departmentOptions.value = [...departmentOptions.value, dept].sort()
+      }
+      
+      form.value.department = dept
+      
+      form.value.supplier_name = trcloudItem.organization || ''
+      form.value.item_ref = trcloudItem.item_name || ''
+      
+      const rawPrice = trcloudItem.item_total || trcloudItem.total || 0
+      form.value.total_price = !isNaN(parseFloat(rawPrice)) ? parseFloat(rawPrice) : null
+      
+      form.value.po_date = poDateIso
+      form.value.ap_status = trcloudItem.status || ''
+      form.value.currency_name = trcloudItem.currency || 'THB' 
+
+      apInfo.value = {
+        po_id: form.value.po_id || '-',
+        po_date: poDateIso ? formatThaiDate(poDateIso) : '-',
+        supplier_name: trcloudItem.organization || '-',
+        item_ref: trcloudItem.item_name || '-',
+        qty_order: form.value.qty_order || '-',
+        option_name: '-',
+        department: form.value.department || '-',
+        po_created_by: form.value.po_created_by || `TRCloud ${type || 'Data'}`,
+      }
+      console.log('Form Autofilled with Cross-ref:', form.value)
       return
     }
 
-    const prId = orderRow.pr_id
-    const { data: reqRow, error: reqError } = await supabase
-      .from('purchasing_req')
-      .select('id, urgent_id, details, amount_req, unit, created_by')
-      .eq('id', prId)
-      .maybeSingle()
-
-    if (reqError) throw reqError
-
-    let urgentName = null
-    if (reqRow?.urgent_id) {
-      const { data: urgentRow } = await supabase
-        .from('urgents')
-        .select('id, option_name')
-        .eq('id', reqRow.urgent_id)
-        .maybeSingle()
-      urgentName = urgentRow?.option_name ? String(urgentRow.option_name).trim() : null
-    }
-
-    const userIds = [orderRow.created_by, reqRow?.created_by].filter(Boolean)
-    const userById = {}
-    if (userIds.length) {
-      const { data: users } = await supabase
-        .from('system_users')
-        .select('id, fullname, emp_code, username, department')
-        .in('id', [...new Set(userIds)])
-      for (const u of users || []) userById[u.id] = u
-    }
-
-    const requester = reqRow?.created_by ? userById[reqRow.created_by] || null : null
-    const orderCreator = orderRow.created_by ? userById[orderRow.created_by] || null : null
-
-    const poDateIso = isoDateFromAny(orderRow.created_at || orderRow.updated_at)
-
-    const nextDepartment = requester?.department ? String(requester.department).trim() : ''
-    if (nextDepartment && !(departmentOptions.value || []).includes(nextDepartment)) {
-      departmentOptions.value = [...departmentOptions.value, nextDepartment]
-    }
-
-    const poNumber = orderRow.lao_po_number ? String(orderRow.lao_po_number).trim() : ''
-    const supplier = orderRow.store_by ? String(orderRow.store_by).trim() : ''
-    const itemRef = reqRow?.details ? String(reqRow.details).trim() : ''
-    const qtyOrder = reqRow?.amount_req ?? null
-
-    form.value.po_id = poNumber
-    form.value.po_date = poDateIso
-    form.value.supplier_name = supplier
-    form.value.item_ref = itemRef
-    form.value.qty_order = qtyOrder
-    form.value.option_name = urgentName || ''
-    form.value.department = nextDepartment
-    form.value.po_created_by = userNameText(orderCreator)
-
-    apInfo.value = {
-      po_id: poNumber || '-',
-      po_date: poDateIso ? formatThaiDate(poDateIso) : '-',
-      supplier_name: supplier || '-',
-      item_ref: itemRef || '-',
-      qty_order: qtyOrder ?? '-',
-      option_name: urgentName || '-',
-      department: nextDepartment || '-',
-      po_created_by: userNameText(orderCreator),
-    }
+    apInfoError.value = 'ไม่พบข้อมูลรายการนี้ใน TRCloud'
   } catch (err) {
     apInfoError.value = String(err?.message || err || 'เกิดข้อผิดพลาด')
   } finally {
@@ -268,10 +302,16 @@ function closeApDropdown() {
 async function selectApOption(value) {
   const v = String(value || '').trim()
   apSearchText.value = v
-  form.value.ap_number = v
+  // ดึงเฉพาะเลขที่เอกสารออกมา (ก่อนเครื่องหมาย |)
+  const docPart = v.split(' | ')[0].trim()
+  form.value.ap_number = docPart
   apDropdownOpen.value = false
   apActiveIndex.value = -1
   await fetchApAutofill(v)
+}
+
+function goBack() {
+  emit('selectPage', { itemId: "/#/pr_ap_items", itemLabel: "รายการ AP (สินค้า)" })
 }
 
 function onApInput() {
@@ -381,8 +421,26 @@ resetForm(false)
 onMounted(() => {
   fetchUrgentOptions()
   fetchDepartmentOptions()
+  // Fetch all TRCloud sources early for the dropdown
+  trcloudStore.fetchTrcloudData('ap')
+  trcloudStore.fetchTrcloudData('po')
+  trcloudStore.fetchTrcloudData('pr')
   apSearchText.value = form.value.ap_number || ''
   showAddedTable.value = (rows.value || []).length > 0
+
+  // ตรวจสอบว่ามีการส่งข้อมูลมาจากหน้าอื่นหรือไม่
+  if (trcloudStore.pendingAutofill) {
+    selectApOption(trcloudStore.pendingAutofill)
+    trcloudStore.pendingAutofill = null
+  }
+})
+
+// เพิ่ม watch สำหรับกรณีที่อยู่ในหน้านี้อยู่แล้วและมีการส่งข้อมูลมาใหม่
+watch(() => trcloudStore.pendingAutofill, (val) => {
+  if (val) {
+    selectApOption(val)
+    trcloudStore.pendingAutofill = null
+  }
 })
 
 function formatNumber(value) {
@@ -592,19 +650,29 @@ watch(
 <template>
   <div>
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-      <div>
-        <h1 class="text-[20px] font-semibold flex items-center gap-2" style="color: var(--color-text-primary)">
-          ฟอมร์ส่งรายการ
-          <span
-            v-if="editMode"
-            class="px-2 py-0.5 rounded-full text-[11px] font-medium border"
-            style="border-color: rgba(249, 115, 22, 0.35); color: #f97316"
-          >
-            แก้ไขข้อมูล
-          </span>
-          <span v-if="editLoading" class="text-[12px] font-normal" style="color: var(--color-text-muted)">กำลังโหลด...</span>
-        </h1>
-        <p class="text-[13px] mt-0.5" style="color: var(--color-text-muted)">บันทึกข้อมูลจากตาราง ap_requests</p>
+      <div class="flex items-center gap-4">
+        <button 
+          @click="goBack"
+          class="p-2 rounded-full hover:bg-gray-100 transition-colors border"
+          style="border-color: var(--color-border); background: var(--color-bg-card)"
+          title="กลับคืน"
+        >
+          <i class="fa-solid fa-arrow-left text-gray-500"></i>
+        </button>
+        <div>
+          <h1 class="text-[20px] font-semibold flex items-center gap-2" style="color: var(--color-text-primary)">
+            ฟอมร์ส่งรายการ
+            <span
+              v-if="editMode"
+              class="px-2 py-0.5 rounded-full text-[11px] font-medium border"
+              style="border-color: rgba(249, 115, 22, 0.35); color: #f97316"
+            >
+              แก้ไขข้อมูล
+            </span>
+            <span v-if="editLoading" class="text-[12px] font-normal" style="color: var(--color-text-muted)">กำลังโหลด...</span>
+          </h1>
+          <p class="text-[13px] mt-0.5" style="color: var(--color-text-muted)">บันทึกข้อมูลจากตาราง ap_requests</p>
+        </div>
       </div>
     </div>
 

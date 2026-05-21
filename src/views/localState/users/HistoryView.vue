@@ -46,30 +46,37 @@ const fetchHistory = async () => {
   if (!auth.user?.id) return
   loading.value = true
   try {
+    let ordersQuery = supabase
+      .from('order_req')
+      .select('*, items(item_name)')
+      .eq('status', 'completed')
+
+    let prQuery = supabase
+      .from('purchasing_req')
+      .select('*, urgents(option_name)')
+
+    let poQuery = supabase
+      .from('purchasing_order')
+      .select(`
+        *,
+        purchasing_req!inner(pr_number, details, amount_req, unit, created_by, urgents(option_name))
+      `)
+
+    // Filter by user unless admin
+    if (auth.user?.role !== 'admin_store' && auth.user?.role !== 'admin') {
+      ordersQuery = ordersQuery.eq('created_by', auth.user.id)
+      prQuery = prQuery.eq('created_by', auth.user.id)
+      poQuery = poQuery.eq('purchasing_req.created_by', auth.user.id)
+    }
+
     const [
       { data: ordersData, error: ordersError },
       { data: prData, error: prError },
       { data: poData, error: poError }
     ] = await Promise.all([
-      supabase
-        .from('order_req')
-        .select('*, items(item_name)')
-        .eq('created_by', auth.user.id)
-        .eq('status', 'completed')
-        .order('updated_at', { ascending: false }),
-      supabase
-        .from('purchasing_req')
-        .select('*, urgents(option_name)')
-        .eq('created_by', auth.user.id)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('purchasing_order')
-        .select(`
-          *,
-          purchasing_req!inner(pr_number, details, amount_req, unit, created_by, urgents(option_name))
-        `)
-        .eq('purchasing_req.created_by', auth.user.id)
-        .order('created_at', { ascending: false })
+      ordersQuery.order('updated_at', { ascending: false }),
+      prQuery.order('created_at', { ascending: false }),
+      poQuery.order('created_at', { ascending: false })
     ])
     
     if (ordersError) throw ordersError

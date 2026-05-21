@@ -250,7 +250,16 @@ const docType = reactive({
   service: false
 })
 
-const companyTopOptions = companyTypeOptions
+const companyTopOptions = [
+  'รถเจาะไทย',
+  'ซันนี่ เฟอติไลเซอร์',
+  'ปุ๋ยรากหญ้า',
+  'ทีดี ฟิกซ์',
+  'ทีดี คอนแทรคเตอร์',
+  'ซันนี่ กรีน ฟาร์ม',
+  'ไทยดิว ลาว',
+  'ซันนี่ แมชีนเนอรี่'
+]
 
 const companyTop = reactive(Object.fromEntries(companyTopOptions.map((t) => [t, false])))
 
@@ -425,9 +434,113 @@ function handlePrint() {
   nextTick(() => { window.print() })
 }
 
+// --- Save to Supabase ---
+const isSaving = ref(false)
+
+async function handleSave() {
+  const validItems = form.items.filter(it => it.itemName || it.itemCode)
+  if (validItems.length === 0) {
+    ui.showToast('กรุณาเพิ่มรายการสินค้าอย่างน้อย 1 รายการ', 'warning')
+    return
+  }
+
+  if (!confirm('ยืนยันการบันทึกข้อมูลใบตรวจรับลงระบบใช่หรือไม่?')) return
+
+  isSaving.value = true
+  try {
+    // 1. Upload Images to Supabase Storage (Bucket: inspections)
+    const uploadedUrls = []
+    if (imageFiles.value.length > 0) {
+      for (const img of imageFiles.value) {
+        if (!img.file) continue // ข้ามถ้าไม่มีไฟล์จริง (เช่น รูปเก่าถ้ามีการแก้ไขในอนาคต)
+        
+        const fileExt = img.file.name.split('.').pop()
+        const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`
+        const filePath = `uploads/${fileName}`
+
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('inspections')
+          .upload(filePath, img.file)
+
+        if (uploadError) throw uploadError
+
+        // Get Public URL
+        const { data: { publicUrl } } = supabase.storage
+          .from('inspections')
+          .getPublicUrl(filePath)
+        
+        uploadedUrls.push(publicUrl)
+      }
+    }
+
+    // 2. Prepare Inspection Header
+    const inspectionData = {
+      inspection_date: form.inspectionDate,
+      doc_type: docType,
+      company_selections: companyTop,
+      repair_bill_no: form.repairBillNo,
+      vendor_source: form.vendorSource,
+      po_number: form.poNumber,
+      vendor_invoice_no: form.vendorInvoiceNo,
+      goods_receipt_no: form.goodsReceiptNo,
+      delivery_place: form.deliveryPlace,
+      receiving_dept: form.receivingDept,
+      valuation: form.valuation,
+      evaluation_data: form.evaluationRows,
+      signatures: form.sign,
+      image_urls: uploadedUrls, // บันทึก URLs รูปภาพที่อัปโหลดแล้ว
+      created_by: auth.user?.id,
+      updated_by: auth.user?.id
+    }
+
+    // Insert into inspections table
+    const { data: insData, error: insError } = await supabase
+      .from('inspections')
+      .insert(inspectionData)
+      .select()
+      .single()
+
+    if (insError) throw insError
+
+    // 3. Prepare Inspection Items
+    const itemsData = validItems.map(it => ({
+      inspection_id: insData.id,
+      item_code: it.itemCode,
+      item_name: it.itemName,
+      unit: it.unit,
+      received_qty: parseFloat(String(it.receivedQty).replace(/,/g, '')) || 0,
+      unit_price: parseFloat(String(it.unitPrice).replace(/,/g, '')) || 0,
+      ordered_qty: parseFloat(String(it.orderedQty).replace(/,/g, '')) || 0,
+      remaining_qty: parseFloat(String(it.remainingQty).replace(/,/g, '')) || 0,
+      total_price: parseFloat(String(it.totalPrice).replace(/,/g, '')) || 0,
+      note: it.note
+    }))
+
+    const { error: itemsError } = await supabase
+      .from('inspection_items')
+      .insert(itemsData)
+
+    if (itemsError) throw itemsError
+
+    ui.showToast('บันทึกข้อมูลใบตรวจรับและอัปโหลดรูปภาพเรียบร้อยแล้ว', 'success')
+    
+    // ถามว่าจะล้างฟอร์มเลยไหม
+    if (confirm('บันทึกสำเร็จ! ต้องการล้างข้อมูลเพื่อเริ่มใบใหม่หรือไม่?')) {
+      clearForm()
+    }
+
+  } catch (err) {
+    console.error('Save Error:', err)
+    ui.showToast('เกิดข้อผิดพลาดในการบันทึก: ' + err.message, 'error')
+  } finally {
+    isSaving.value = false
+  }
+}
+
 // ============================================================
-// ฟังก์ชันดาวน์โหลด PDF จริงๆ โดยใช้ html2canvas + jsPDF
-// แปลง preview paper ที่แสดงอยู่ใน modal เป็นรูปแล้วบันทึกเป็น PDF
+// ฟังก์ชันดาวน์โหลด PDF — แก้ไขให้ layout ไม่แตก
+// ใช้ html2canvas แคปขนาดจริง + คำนวณ ratio พอดี A4
+// ถ้า content ยาวเกิน 1 หน้าจะแบ่งหน้าอัตโนมัติ
 // ============================================================
 async function handleDownloadPDF() {
   if (!previewPaperRef.value) {
@@ -438,28 +551,56 @@ async function handleDownloadPDF() {
   isGeneratingPDF.value = true
 
   try {
-    // รอให้ DOM render เสร็จก่อน
     await nextTick()
 
     const element = previewPaperRef.value
 
-    // ใช้ html2canvas แปลง element เป็น canvas
+    // ✅ ใช้ระบบแคปภาพที่เสถียรที่สุดเพื่อความแม่นยำของโครงร่าง
     const canvas = await html2canvas(element, {
-      scale: 2,                    // ความละเอียดสูง (2x) เพื่อให้ PDF คมชัด
-      useCORS: true,               // รองรับรูปภาพจาก domain อื่น
+      scale: 4,                    // เพิ่มความคมชัดสูงสุดเป็น 4 เท่า
+      useCORS: true,
       allowTaint: true,
-      backgroundColor: '#ffffff',  // พื้นหลังขาว
+      backgroundColor: '#ffffff',
       logging: false,
-      width: element.scrollWidth,
-      height: element.scrollHeight,
-      windowWidth: element.scrollWidth,
-      windowHeight: element.scrollHeight,
+      width: 794,                  // ความกว้างมาตรฐาน A4 (210mm) ที่ 96 DPI
+      windowWidth: 794,            // บังคับให้เบราว์เซอร์เรนเดอร์ที่ความกว้างนี้
+      onclone: (clonedDoc) => {
+        const clonedEl = clonedDoc.querySelector('.preview-paper-wrapper')
+        if (clonedEl) {
+          clonedEl.style.boxShadow = 'none'
+          clonedEl.style.transform = 'none'
+          clonedEl.style.margin = '0'
+          clonedEl.style.borderRadius = '0'
+          clonedEl.style.width = '794px'
+          clonedEl.style.overflow = 'visible'
+
+          // บังคับให้ตารางทั้งหมดแสดงผลเส้นขอบอย่างสมบูรณ์
+          const tables = clonedEl.querySelectorAll('table')
+          tables.forEach(t => {
+            t.style.borderCollapse = 'collapse'
+            t.style.width = '100%'
+            t.style.border = '1px solid black'
+            t.style.tableLayout = 'fixed' // บังคับ layout ให้คงที่ใน PDF
+          })
+
+          const allCells = clonedEl.querySelectorAll('th, td')
+          allCells.forEach(cell => {
+            cell.style.border = '1px solid black'
+            cell.style.backgroundColor = 'white'
+            cell.style.boxSizing = 'border-box'
+            cell.style.verticalAlign = 'middle' // จัดข้อความให้อยู่กลางช่อง
+          })
+        }
+      }
     })
 
-    // แปลง canvas เป็น base64 image
-    const imgData = canvas.toDataURL('image/jpeg', 0.95)
+    // แปลง canvas เป็นภาพคุณภาพสูง
+    const imgData = canvas.toDataURL('image/jpeg', 1.0)
 
-    // สร้าง PDF ขนาด A4
+    // ขนาดมาตรฐาน A4 ในหน่วย mm
+    const pageWidthMM = 210
+    const pageHeightMM = 297
+
     const pdf = new jsPDF({
       orientation: 'portrait',
       unit: 'mm',
@@ -467,29 +608,9 @@ async function handleDownloadPDF() {
       compress: true,
     })
 
-    const pageWidth = 210   // A4 กว้าง 210mm
-    const pageHeight = 297  // A4 สูง 297mm
+    // บังคับให้ภาพวางพอดีหน้า A4 (Stretch to fit if needed, but here it should be 1:1)
+    pdf.addImage(imgData, 'JPEG', 0, 0, pageWidthMM, pageHeightMM, undefined, 'FAST')
 
-    // คำนวณสัดส่วนความสูงของรูป
-    const imgWidth = pageWidth
-    const imgHeight = (canvas.height * pageWidth) / canvas.width
-
-    if (imgHeight <= pageHeight) {
-      // เนื้อหาพอดีหน้าเดียว
-      pdf.addImage(imgData, 'JPEG', 0, 0, imgWidth, imgHeight)
-    } else {
-      // เนื้อหายาวเกิน 1 หน้า — แบ่งหน้าอัตโนมัติ
-      let yOffset = 0
-      let pageNum = 0
-      while (yOffset < imgHeight) {
-        if (pageNum > 0) pdf.addPage()
-        pdf.addImage(imgData, 'JPEG', 0, -yOffset, imgWidth, imgHeight)
-        yOffset += pageHeight
-        pageNum++
-      }
-    }
-
-    // ตั้งชื่อไฟล์ตาม OR number หรือวันที่
     const fileName = currentRequestId.value
       ? `inspection-memo-OR${currentRequestId.value}.pdf`
       : `inspection-memo-${form.inspectionDate}.pdf`
@@ -520,6 +641,15 @@ async function handleDownloadPDF() {
               class="px-4 py-1.5 bg-white border border-red-300 rounded-lg shadow-sm hover:bg-red-50 text-sm font-bold text-red-600 flex items-center gap-2"
             >
               <i class="fa-solid fa-trash-can"></i> ล้างข้อมูล
+            </button>
+            <button
+              @click="handleSave"
+              :disabled="isSaving"
+              class="px-4 py-1.5 bg-blue-600 border border-blue-700 rounded-lg shadow-sm hover:bg-blue-700 text-sm font-bold text-white flex items-center gap-2 disabled:opacity-50"
+            >
+              <i v-if="isSaving" class="fa-solid fa-spinner fa-spin"></i>
+              <i v-else class="fa-solid fa-floppy-disk"></i>
+              {{ isSaving ? 'กำลังบันทึก...' : 'บันทึกข้อมูล' }}
             </button>
             <button
               @click="handleOpenPreview"
@@ -728,9 +858,9 @@ async function handleDownloadPDF() {
               </div>
 
               <!-- Attach Images Section -->
-              <div class="border-b border-gray-300">
+              <div class="border-b border-gray-300 flex-1 flex flex-col min-h-[250px]">
                 <div class="bg-gray-100 text-center py-1 border-b border-gray-300 font-bold text-[10px] uppercase text-black">แนบรูปภาพการตรวจรับ</div>
-                <div class="p-3 min-h-[120px]">
+                <div class="p-3 flex-1 flex flex-col">
                   <div class="flex flex-wrap gap-3 justify-center items-center">
                     <div v-for="(img, idx) in imageFiles" :key="idx" class="relative group">
                       <img :src="img.url" class="h-36 w-52 object-cover border border-gray-300 rounded shadow-sm" />
@@ -1066,11 +1196,11 @@ async function handleDownloadPDF() {
 
             <!-- Images Section -->
             <div style="background: #f3f4f6; text-align: center; padding: 2px; border-bottom: 0.5px solid black; font-weight: bold; font-size: 10px;">แนบรูปภาพการตรวจรับ</div>
-            <div style="flex: 1; padding: 8px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; min-height: 120px; border-bottom: 0.5px solid black;">
-              <div v-for="(img, idx) in imageFiles" :key="idx" style="border: 0.5px solid #ccc; padding: 2px;">
-                <img :src="img.url" style="height: 120px; width: auto;" />
+            <div style="flex: 1; padding: 12px; display: flex; flex-wrap: wrap; gap: 15px; justify-content: center; min-height: 200px; border-bottom: 0.5px solid black; align-content: flex-start;">
+              <div v-for="(img, idx) in imageFiles" :key="idx" style="border: 0.5px solid #ccc; padding: 3px; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                <img :src="img.url" style="height: 180px; width: 260px; object-fit: cover;" />
               </div>
-              <div v-if="imageFiles.length === 0" style="color: #9ca3af; font-size: 10px; margin-top: 40px;">- ไม่มีรูปภาพแนบ -</div>
+              <div v-if="imageFiles.length === 0" style="color: #9ca3af; font-size: 12px; display: flex; align-items: center; flex: 1; justify-content: center;">- ไม่มีรูปภาพแนบ -</div>
             </div>
 
             <!-- Signatures Section -->
@@ -1145,7 +1275,7 @@ async function handleDownloadPDF() {
 
             <!-- Right: Action Buttons -->
             <div class="flex items-center gap-2">
-              <!-- Download PDF — ใช้ handleDownloadPDF จริงๆ แล้ว -->
+              <!-- Download PDF -->
               <button
                 @click="handleDownloadPDF"
                 :disabled="isGeneratingPDF"
@@ -1194,6 +1324,7 @@ async function handleDownloadPDF() {
                 <div
                   style="
                     width: 210mm;
+                    min-height: 297mm;
                     background: white;
                     padding: 5mm;
                     box-sizing: border-box;
@@ -1205,179 +1336,179 @@ async function handleDownloadPDF() {
                     flex-direction: column;
                   "
                 >
-                  <div style="border: 1.5px solid black; width: 100%; display: flex; flex-direction: column;">
+                  <div style="border: 2px solid black; width: 100%; display: flex; flex-direction: column; flex: 1; background-color: white;">
 
                     <!-- Header -->
-                    <div style="border-bottom: 0.8px solid black; padding: 4px;">
+                    <div style="border-bottom: 1px solid black; padding: 6px; background-color: white;">
                       <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                         <div style="display: flex; gap: 4px; align-items: center;">
-                          <img :src="logoThaiDrill" style="height: 22px; width: auto;" />
-                          <img :src="logoSunnyFertilizer" style="height: 22px; width: auto;" />
-                          <img :src="logoPuiRakYa" style="height: 22px; width: auto;" />
-                          <img :src="logoTdFix" style="height: 22px; width: auto;" />
-                          <img :src="logoTdContractor" style="height: 22px; width: auto;" />
-                          <img :src="logoSunnyGreenFarm" style="height: 22px; width: auto;" />
-                          <img :src="logoThaiDrillLao" style="height: 22px; width: auto;" />
-                          <img :src="logoSunny" style="height: 22px; width: auto;" />
+                          <img :src="logoThaiDrill" style="height: 24px; width: auto;" />
+                          <img :src="logoSunnyFertilizer" style="height: 24px; width: auto;" />
+                          <img :src="logoPuiRakYa" style="height: 24px; width: auto;" />
+                          <img :src="logoTdFix" style="height: 24px; width: auto;" />
+                          <img :src="logoTdContractor" style="height: 24px; width: auto;" />
+                          <img :src="logoSunnyGreenFarm" style="height: 24px; width: auto;" />
+                          <img :src="logoThaiDrillLao" style="height: 24px; width: auto;" />
+                          <img :src="logoSunny" style="height: 24px; width: auto;" />
                         </div>
-                        <div style="text-align: right; font-size: 6px; line-height: 1.2;">FM-HO-PC01-07<br/>REV.01 - 17/10/2567</div>
+                        <div style="text-align: right; font-size: 7px; line-height: 1.2;">FM-HO-PC01-07<br/>REV.01 - 17/10/2567</div>
                       </div>
-                      <div style="text-align: center; margin-top: 2px;">
-                        <div style="font-size: 13px; font-weight: bold; letter-spacing: 0.5px;">ใบตรวจรับพัสดุ / การจ้าง / การเช่า / การบริการ</div>
-                        <div style="font-size: 10px; font-weight: bold;">(Inspection Memo)</div>
+                      <div style="text-align: center; margin-top: 4px;">
+                        <div style="font-size: 14px; font-weight: bold; letter-spacing: 0.5px;">ใบตรวจรับพัสดุ / การจ้าง / การเช่า / การบริการ</div>
+                        <div style="font-size: 11px; font-weight: bold;">(Inspection Memo)</div>
                       </div>
-                      <div style="display: flex; justify-content: space-between; font-size: 7.5px; margin-top: 6px; border-top: 0.5px solid black; padding-top: 3px;">
-                        <div v-for="t in companyTopOptions" :key="t" style="display: flex; align-items: center; gap: 3px;">
-                          <div style="width: 9px; height: 9px; border: 0.5px solid black; display: flex; align-items: center; justify-content: center; background: white;">
+                      <div style="display: flex; justify-content: space-around; font-size: 7px; margin-top: 8px; border-top: 1px solid black; padding-top: 5px; flex-wrap: nowrap;">
+                        <div v-for="t in companyTopOptions" :key="t" style="display: flex; align-items: center; gap: 2px; white-space: nowrap;">
+                          <div style="width: 9px; height: 9px; border: 1px solid black; display: flex; align-items: center; justify-content: center; background: white; flex-shrink: 0;">
                             <i v-if="companyTop[t]" class="fa-solid fa-check" style="font-size: 7px;"></i>
                           </div>
-                          <span>{{ t }}</span>
+                          <span style="font-size: 7px;">{{ t }}</span>
                         </div>
                       </div>
                     </div>
 
                     <!-- Doc Type & Info -->
-                    <div style="display: flex; border-bottom: 0.8px solid black;">
-                      <div style="width: 50%; padding: 6px; border-right: 0.8px solid black; display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
-                        <div v-for="(val, key) in {goods:'พัสดุ', hire:'การจ้าง', rent:'การเช่า', service:'การบริการ'}" :key="key" style="display: flex; align-items: center; gap: 6px;">
-                          <div style="width: 10px; height: 10px; border: 0.5px solid black; display: flex; align-items: center; justify-content: center; background: white;">
-                            <i v-if="docType[key]" class="fa-solid fa-check" style="font-size: 8px;"></i>
+                    <div style="display: flex; border-bottom: 1px solid black; background-color: white;">
+                      <div style="width: 50%; padding: 8px; border-right: 1px solid black; display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+                        <div v-for="(val, key) in {goods:'พัสดุ', hire:'การจ้าง', rent:'การเช่า', service:'การบริการ'}" :key="key" style="display: flex; align-items: center; gap: 8px;">
+                          <div style="width: 12px; height: 12px; border: 1px solid black; display: flex; align-items: center; justify-content: center; background: white;">
+                            <i v-if="docType[key]" class="fa-solid fa-check" style="font-size: 9px;"></i>
                           </div>
-                          <span style="font-size: 10px;">{{ val }}</span>
+                          <span style="font-size: 11px;">{{ val }}</span>
                         </div>
                       </div>
-                      <div style="width: 50%; padding: 6px; font-size: 10px;">
-                        <div style="display: flex; margin-bottom: 4px;">
-                          <span style="width: 80px;">วันที่ตรวจรับ</span>
-                          <div style="flex: 1; border-bottom: 0.5px solid black; text-align: center; font-weight: bold;">{{ formatDateOnly(form.inspectionDate) }}</div>
+                      <div style="width: 50%; padding: 8px; font-size: 11px;">
+                        <div style="display: flex; margin-bottom: 6px; align-items: flex-end;">
+                          <span style="width: 90px; padding-bottom: 2px;">วันที่ตรวจรับ</span>
+                          <div style="flex: 1; border-bottom: 1px solid black; text-align: center; font-weight: bold; padding-bottom: 2px;">{{ formatDateOnly(form.inspectionDate) }}</div>
                         </div>
-                        <div style="display: flex;">
-                          <span style="width: 80px;">เลขที่ใบแจ้งซ่อม</span>
-                          <div style="flex: 1; border-bottom: 0.5px solid black; text-align: center; font-weight: bold;">{{ form.repairBillNo }}</div>
+                        <div style="display: flex; align-items: flex-end;">
+                          <span style="width: 90px; padding-bottom: 2px;">เลขที่ใบแจ้งซ่อม</span>
+                          <div style="flex: 1; border-bottom: 1px solid black; text-align: center; font-weight: bold; padding-bottom: 2px;">{{ form.repairBillNo }}</div>
                         </div>
                       </div>
                     </div>
 
                     <!-- Seller & Order Info -->
-                    <div style="display: flex; border-bottom: 0.8px solid black; font-size: 10px;">
-                      <div style="width: 50%; padding: 6px; border-right: 0.8px solid black;">
-                        <div style="display: flex; margin-bottom: 4px;"><span style="width: 110px;">สินค้ามาจากผู้ขาย</span><div style="flex: 1; border-bottom: 0.5px solid black; font-weight: bold; padding-left: 4px;">{{ form.vendorSource }}</div></div>
-                        <div style="display: flex; margin-bottom: 4px;"><span style="width: 110px;">ใบแจ้งหนี้ผู้ขาย</span><div style="flex: 1; border-bottom: 0.5px solid black; font-weight: bold; padding-left: 4px;">{{ form.vendorInvoiceNo }}</div></div>
-                        <div style="display: flex;"><span style="width: 110px;">สถานที่จัดส่ง/ให้บริการ</span><div style="flex: 1; border-bottom: 0.5px solid black; font-weight: bold; padding-left: 4px;">{{ form.deliveryPlace }}</div></div>
+                    <div style="display: flex; border-bottom: 1px solid black; font-size: 11px; background-color: white;">
+                      <div style="width: 50%; padding: 8px; border-right: 1px solid black;">
+                        <div style="display: flex; margin-bottom: 6px; align-items: flex-end;"><span style="width: 120px; padding-bottom: 2px;">สินค้ามาจากผู้ขาย</span><div style="flex: 1; border-bottom: 1px solid black; font-weight: bold; padding-left: 6px; padding-bottom: 2px;">{{ form.vendorSource }}</div></div>
+                        <div style="display: flex; margin-bottom: 6px; align-items: flex-end;"><span style="width: 120px; padding-bottom: 2px;">ใบแจ้งหนี้ผู้ขาย</span><div style="flex: 1; border-bottom: 1px solid black; font-weight: bold; padding-left: 6px; padding-bottom: 2px;">{{ form.vendorInvoiceNo }}</div></div>
+                        <div style="display: flex; align-items: flex-end;"><span style="width: 120px; padding-bottom: 2px;">สถานที่จัดส่ง/ให้บริการ</span><div style="flex: 1; border-bottom: 1px solid black; font-weight: bold; padding-left: 6px; padding-bottom: 2px;">{{ form.deliveryPlace }}</div></div>
                       </div>
-                      <div style="width: 50%; padding: 6px;">
-                        <div style="display: flex; margin-bottom: 4px;"><span style="width: 110px;">หมายเลขใบสั่งซื้อ</span><div style="flex: 1; border-bottom: 0.5px solid black; font-weight: bold; text-align: center;">{{ form.poNumber }}</div></div>
-                        <div style="display: flex; margin-bottom: 4px;"><span style="width: 110px;">หมายเลขใบรับสินค้า</span><div style="flex: 1; border-bottom: 0.5px solid black; font-weight: bold; text-align: center;">{{ form.goodsReceiptNo }}</div></div>
-                        <div style="display: flex;"><span style="width: 110px;">แผนกที่ตรวจรับ</span><div style="flex: 1; border-bottom: 0.5px solid black; font-weight: bold; text-align: center;">{{ form.receivingDept }}</div></div>
+                      <div style="width: 50%; padding: 8px;">
+                        <div style="display: flex; margin-bottom: 6px; align-items: flex-end;"><span style="width: 120px; padding-bottom: 2px;">หมายเลขใบสั่งซื้อ</span><div style="flex: 1; border-bottom: 1px solid black; font-weight: bold; text-align: center; padding-bottom: 2px;">{{ form.poNumber }}</div></div>
+                        <div style="display: flex; margin-bottom: 6px; align-items: flex-end;"><span style="width: 120px; padding-bottom: 2px;">หมายเลขใบรับสินค้า</span><div style="flex: 1; border-bottom: 1px solid black; font-weight: bold; text-align: center; padding-bottom: 2px;">{{ form.goodsReceiptNo }}</div></div>
+                        <div style="display: flex; align-items: flex-end;"><span style="width: 120px; padding-bottom: 2px;">แผนกที่ตรวจรับ</span><div style="flex: 1; border-bottom: 1px solid black; font-weight: bold; text-align: center; padding-bottom: 2px;">{{ form.receivingDept }}</div></div>
                       </div>
                     </div>
 
                     <!-- Items Table -->
-                    <table style="width: 100%; border-collapse: collapse; table-layout: fixed;">
+                    <table style="width: 100%; border-collapse: collapse; background-color: white; table-layout: fixed; border: 1px solid black; border-bottom: none; box-sizing: border-box;">
                       <thead>
                         <tr style="background: #f3f4f6; font-weight: bold; text-align: center; font-size: 9px;">
-                          <th style="border: 0.5px solid black; width: 25px;">ลำดับ</th>
-                          <th style="border: 0.5px solid black; width: 100px;">รหัสสินค้า</th>
-                          <th style="border: 0.5px solid black;">รายการ</th>
-                          <th style="border: 0.5px solid black; width: 40px;">รับจริง</th>
-                          <th style="border: 0.5px solid black; width: 40px;">หน่วย</th>
-                          <th style="border: 0.5px solid black; width: 50px;">ราคา/หน่วย</th>
-                          <th style="border: 0.5px solid black; width: 60px;">ราคารวม</th>
-                          <th style="border: 0.5px solid black; width: 40px;">สั่งซื้อ</th>
-                          <th style="border: 0.5px solid black; width: 40px;">คงเหลือ</th>
-                          <th style="border: 0.5px solid black; width: 80px;">หมายเหตุ</th>
+                          <th style="border: 1px solid black; width: 35px; padding: 4px 1px; box-sizing: border-box;">ลำดับ</th>
+                          <th style="border: 1px solid black; width: 95px; padding: 4px 1px; box-sizing: border-box;">รหัสสินค้า</th>
+                          <th style="border: 1px solid black; width: 216px; padding: 4px 2px; box-sizing: border-box;">รายการ</th>
+                          <th style="border: 1px solid black; width: 40px; padding: 4px 1px; box-sizing: border-box;">รับจริง</th>
+                          <th style="border: 1px solid black; width: 40px; padding: 4px 1px; box-sizing: border-box;">หน่วย</th>
+                          <th style="border: 1px solid black; width: 60px; padding: 4px 1px; box-sizing: border-box;">ราคา/หน่วย</th>
+                          <th style="border: 1px solid black; width: 70px; padding: 4px 1px; box-sizing: border-box;">ราคารวม</th>
+                          <th style="border: 1px solid black; width: 40px; padding: 4px 1px; box-sizing: border-box;">สั่งซื้อ</th>
+                          <th style="border: 1px solid black; width: 40px; padding: 4px 1px; box-sizing: border-box;">คงเหลือ</th>
+                          <th style="border: 1px solid black; width: 80px; padding: 4px 1px; box-sizing: border-box;">หมายเหตุ</th>
                         </tr>
                       </thead>
                       <tbody>
-                        <tr v-for="(it, idx) in form.items" :key="idx" style="height: 22px; font-size: 9px;">
-                          <td style="border: 0.5px solid black; text-align: center;">{{ idx + 1 }}</td>
-                          <td style="border: 0.5px solid black; text-align: center; font-weight: bold;">{{ it.itemCode }}</td>
-                          <td style="border: 0.5px solid black; padding-left: 4px;">{{ it.itemName }}</td>
-                          <td style="border: 0.5px solid black; text-align: center;">{{ it.receivedQty }}</td>
-                          <td style="border: 0.5px solid black; text-align: center;">{{ it.unit }}</td>
-                          <td style="border: 0.5px solid black; text-align: right; padding-right: 4px;">{{ it.unitPrice }}</td>
-                          <td style="border: 0.5px solid black; text-align: right; padding-right: 4px; font-weight: bold;">{{ it.totalPrice }}</td>
-                          <td style="border: 0.5px solid black; text-align: center;">{{ it.orderedQty }}</td>
-                          <td style="border: 0.5px solid black; text-align: center;">{{ it.remainingQty }}</td>
-                          <td style="border: 0.5px solid black; padding-left: 4px; font-size: 8px;">{{ it.note }}</td>
+                        <tr v-for="(it, idx) in form.items" :key="idx" style="font-size: 9px; height: 30px;">
+                          <td style="border: 1px solid black; text-align: center; width: 35px; box-sizing: border-box;">{{ idx + 1 }}</td>
+                          <td style="border: 1px solid black; text-align: center; font-weight: bold; width: 95px; box-sizing: border-box; overflow: hidden; white-space: nowrap;">{{ it.itemCode }}</td>
+                          <td style="border: 1px solid black; padding: 0 4px; width: 216px; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ it.itemName }}</td>
+                          <td style="border: 1px solid black; text-align: center; width: 40px; box-sizing: border-box;">{{ it.receivedQty }}</td>
+                          <td style="border: 1px solid black; text-align: center; width: 40px; box-sizing: border-box;">{{ it.unit }}</td>
+                          <td style="border: 1px solid black; text-align: right; padding-right: 4px; width: 60px; box-sizing: border-box;">{{ it.unitPrice }}</td>
+                          <td style="border: 1px solid black; text-align: right; padding-right: 4px; font-weight: bold; width: 70px; box-sizing: border-box;">{{ it.totalPrice }}</td>
+                          <td style="border: 1px solid black; text-align: center; width: 40px; box-sizing: border-box;">{{ it.orderedQty }}</td>
+                          <td style="border: 1px solid black; text-align: center; width: 40px; box-sizing: border-box;">{{ it.remainingQty }}</td>
+                          <td style="border: 1px solid black; padding: 0 4px; font-size: 8px; width: 80px; box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ it.note }}</td>
                         </tr>
-                        <tr style="font-weight: bold; font-size: 9px;">
-                          <td colspan="6" style="border: none; text-align: right; padding-right: 6px;">มูลค่าสินค้าก่อน VAT</td>
-                          <td style="border: 0.5px solid black; text-align: right; padding-right: 4px;">{{ form.valuation.beforeVat }}</td>
-                          <td colspan="3" style="border: 0.5px solid black; padding-left: 5px;">{{ form.valuation.currency }}</td>
+                        <tr style="font-weight: bold; font-size: 10px;">
+                          <td colspan="6" style="border: 1px solid black; text-align: right; padding-right: 10px; height: 30px;">มูลค่าสินค้าก่อน VAT</td>
+                          <td style="border: 1px solid black; text-align: right; padding-right: 6px;">{{ form.valuation.beforeVat }}</td>
+                          <td colspan="3" style="border: 1px solid black; padding-left: 8px;">{{ form.valuation.currency }}</td>
                         </tr>
-                        <tr style="font-weight: bold; font-size: 9px;">
-                          <td colspan="6" style="border: none; text-align: right; padding-right: 6px;">ภาษีมูลค่าเพิ่ม {{ form.valuation.vatPercent }}%(VAT)</td>
-                          <td style="border: 0.5px solid black; text-align: right; padding-right: 4px;">{{ form.valuation.vat }}</td>
-                          <td colspan="3" style="border: 0.5px solid black; padding-left: 5px;">{{ form.valuation.currency }}</td>
+                        <tr style="font-weight: bold; font-size: 10px;">
+                          <td colspan="6" style="border: 1px solid black; text-align: right; padding-right: 10px; height: 30px;">ภาษีมูลค่าเพิ่ม {{ form.valuation.vatPercent }}%(VAT)</td>
+                          <td style="border: 1px solid black; text-align: right; padding-right: 6px;">{{ form.valuation.vat }}</td>
+                          <td colspan="3" style="border: 1px solid black; padding-left: 8px;">{{ form.valuation.currency }}</td>
                         </tr>
-                        <tr style="font-weight: bold; font-size: 9px;">
-                          <td colspan="6" style="border: none; text-align: right; padding-right: 6px;">รวมเป็นเงินทั้งสิ้น</td>
-                          <td style="border: 0.5px solid black; text-align: right; padding-right: 4px;">{{ form.valuation.total }}</td>
-                          <td colspan="3" style="border: 0.5px solid black; padding-left: 5px;">{{ form.valuation.currency }}</td>
+                        <tr style="font-weight: bold; font-size: 10px;">
+                          <td colspan="6" style="border: 1px solid black; text-align: right; padding-right: 10px; height: 30px;">รวมเป็นเงินทั้งสิ้น</td>
+                          <td style="border: 1px solid black; text-align: right; padding-right: 6px;">{{ form.valuation.total }}</td>
+                          <td colspan="3" style="border: 1px solid black; padding-left: 8px;">{{ form.valuation.currency }}</td>
                         </tr>
                       </tbody>
                     </table>
 
                     <!-- Evaluation -->
-                    <div style="width: 100%; border: 0.8px solid black; background: #f3f4f6; text-align: center; padding: 4px; font-weight: bold; font-size: 10px;">แบบประเมินผู้ขาย / ผู้ให้บริการ</div>
-                    <table style="width: 100%; border-collapse: collapse; table-layout: fixed; border: 0.8px solid black; border-top: none;">
+                    <div style="width: 100%; border-top: 1px solid black; background: #f3f4f6; text-align: center; padding: 6px; font-weight: bold; font-size: 11px; box-sizing: border-box;">แบบประเมินผู้ขาย / ผู้ให้บริการ</div>
+                    <table style="width: 100%; border-collapse: collapse; background-color: white; table-layout: fixed; border: 1px solid black; border-top: none; box-sizing: border-box;">
                       <thead>
-                        <tr style="background: #f9fafb; font-weight: bold; text-align: center; font-size: 9px;">
-                          <th rowspan="2" style="border: 0.5px solid black; width: 40px;">ลำดับ</th>
-                          <th rowspan="2" style="border: 0.5px solid black; text-align: left; padding-left: 8px;">รายการ</th>
-                          <th colspan="3" style="border: 0.5px solid black;">ประเมินผล</th>
-                          <th rowspan="2" style="border: 0.5px solid black; width: 150px;">หมายเหตุ</th>
+                        <tr style="background: #f9fafb; font-weight: bold; text-align: center; font-size: 10px;">
+                          <th rowspan="2" style="border: 1px solid black; width: 45px; padding: 6px 2px; box-sizing: border-box;">ลำดับ</th>
+                          <th rowspan="2" style="border: 1px solid black; text-align: left; padding-left: 10px; box-sizing: border-box;">รายการ</th>
+                          <th colspan="3" style="border: 1px solid black; width: 195px; padding: 6px 2px; box-sizing: border-box;">ประเมินผล</th>
+                          <th rowspan="2" style="border: 1px solid black; width: 180px; padding: 6px 2px; box-sizing: border-box;">หมายเหตุ</th>
                         </tr>
-                        <tr style="background: #f9fafb; font-weight: bold; text-align: center; font-size: 9px;">
-                          <th style="border: 0.5px solid black; width: 50px;">ดี</th>
-                          <th style="border: 0.5px solid black; width: 50px;">พอใช้</th>
-                          <th style="border: 0.5px solid black; width: 80px;">ควรปรับปรุง</th>
+                        <tr style="background: #f9fafb; font-weight: bold; text-align: center; font-size: 10px;">
+                          <th style="border: 1px solid black; width: 55px; padding: 6px 2px; box-sizing: border-box;">ดี</th>
+                          <th style="border: 1px solid black; width: 55px; padding: 6px 2px; box-sizing: border-box;">พอใช้</th>
+                          <th style="border: 1px solid black; width: 85px; padding: 6px 2px; box-sizing: border-box;">ควรปรับปรุง</th>
                         </tr>
                       </thead>
                       <tbody>
-                        <tr v-for="(r, idx) in form.evaluationRows" :key="idx" style="height: 28px; font-size: 9px;">
-                          <td style="border: 0.5px solid black; text-align: center;">{{ idx + 1 }}</td>
-                          <td style="border: 0.5px solid black; padding-left: 8px;">{{ r.text }}</td>
-                          <td style="border: 0.5px solid black; text-align: center;"><div style="width: 12px; height: 12px; border: 0.5px solid black; margin: auto; display: flex; align-items: center; justify-content: center;"><span v-if="r.good" style="font-weight: bold; font-size: 11px;">✓</span></div></td>
-                          <td style="border: 0.5px solid black; text-align: center;"><div style="width: 12px; height: 12px; border: 0.5px solid black; margin: auto; display: flex; align-items: center; justify-content: center;"><span v-if="r.fair" style="font-weight: bold; font-size: 11px;">✓</span></div></td>
-                          <td style="border: 0.5px solid black; text-align: center;"><div style="width: 12px; height: 12px; border: 0.5px solid black; margin: auto; display: flex; align-items: center; justify-content: center;"><span v-if="r.improve" style="font-weight: bold; font-size: 11px;">✓</span></div></td>
-                          <td style="border: 0.5px solid black; padding-left: 4px;">{{ r.note }}</td>
+                        <tr v-for="(r, idx) in form.evaluationRows" :key="idx" style="height: 34px; font-size: 10px;">
+                          <td style="border: 1px solid black; text-align: center; width: 45px; box-sizing: border-box;">{{ idx + 1 }}</td>
+                          <td style="border: 1px solid black; padding-left: 10px; box-sizing: border-box;">{{ r.text }}</td>
+                          <td style="border: 1px solid black; text-align: center; width: 55px; box-sizing: border-box;"><div style="width: 14px; height: 14px; border: 1px solid black; margin: auto; display: flex; align-items: center; justify-content: center; background: white;"><span v-if="r.good" style="font-weight: bold; font-size: 12px;">✓</span></div></td>
+                          <td style="border: 1px solid black; text-align: center; width: 55px; box-sizing: border-box;"><div style="width: 14px; height: 14px; border: 1px solid black; margin: auto; display: flex; align-items: center; justify-content: center; background: white;"><span v-if="r.fair" style="font-weight: bold; font-size: 12px;">✓</span></div></td>
+                          <td style="border: 1px solid black; text-align: center; width: 85px; box-sizing: border-box;"><div style="width: 14px; height: 14px; border: 1px solid black; margin: auto; display: flex; align-items: center; justify-content: center; background: white;"><span v-if="r.improve" style="font-weight: bold; font-size: 12px;">✓</span></div></td>
+                          <td style="border: 1px solid black; padding-left: 6px; width: 180px; box-sizing: border-box;">{{ r.note }}</td>
                         </tr>
                       </tbody>
                     </table>
 
                     <!-- Images -->
-                    <div style="background: #f3f4f6; text-align: center; padding: 2px; border-bottom: 0.5px solid black; font-weight: bold; font-size: 10px;">แนบรูปภาพการตรวจรับ</div>
-                    <div style="padding: 8px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; min-height: 80px; border-bottom: 0.5px solid black;">
-                      <div v-for="(img, idx) in imageFiles" :key="idx" style="border: 0.5px solid #ccc; padding: 2px;">
-                        <img :src="img.url" style="height: 100px; width: auto;" />
+                    <div style="background: #f3f4f6; text-align: center; padding: 4px; border-bottom: 1px solid black; font-weight: bold; font-size: 11px;">แนบรูปภาพการตรวจรับ</div>
+                    <div style="padding: 15px; display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; flex: 1; min-height: 250px; border-bottom: 1px solid black; align-content: flex-start; background-color: white;">
+                      <div v-for="(img, idx) in imageFiles" :key="idx" style="border: 1px solid #ccc; padding: 4px; background: white; box-shadow: 0 1px 4px rgba(0,0,0,0.1);">
+                        <img :src="img.url" style="height: 200px; width: 280px; object-fit: cover;" />
                       </div>
-                      <div v-if="imageFiles.length === 0" style="color: #9ca3af; font-size: 10px; display: flex; align-items: center;">- ไม่มีรูปภาพแนบ -</div>
+                      <div v-if="imageFiles.length === 0" style="color: #9ca3af; font-size: 14px; display: flex; align-items: center; flex: 1; justify-content: center;">- ไม่มีรูปภาพแนบ -</div>
                     </div>
 
                     <!-- Signatures -->
-                    <div style="padding: 10px 6px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
+                    <div style="padding: 20px 10px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 30px; background-color: white;">
                       <div v-for="(role, key) in {
                         receiver: receiverRoleLabel,
                         inspector: 'ผู้ตรวจสอบ (หัวหน้างาน)',
                         documentReceiver: 'ผู้รับเอกสาร (จนท.จัดซื้อ/การเงิน)'
-                      }" :key="key" style="text-align: left; display: flex; flex-direction: column; font-size: 8.5px; line-height: 1.6;">
-                        <div style="display: flex; align-items: flex-end; width: 100%;">
-                          <span style="white-space: nowrap;">ลงชื่อ</span>
-                          <div style="flex: 1; border-bottom: 0.5px dotted black; margin-left: 2px; height: 14px; position: relative;">
-                            <div v-if="form.sign[key].name" style="position: absolute; bottom: 2px; left: 0; right: 0; text-align: center; font-weight: bold; color: #1e40af; font-size: 11px;">{{ form.sign[key].name }}</div>
+                      }" :key="key" style="text-align: left; display: flex; flex-direction: column; font-size: 9.5px; line-height: 1.8;">
+                        <div style="display: flex; align-items: flex-end; width: 100%; margin-bottom: 4px;">
+                          <span style="white-space: nowrap; padding-bottom: 2px;">ลงชื่อ</span>
+                          <div style="flex: 1; border-bottom: 1px solid black; margin-left: 4px; height: 18px; position: relative;">
+                            <div v-if="form.sign[key].name" style="position: absolute; bottom: 3px; left: 0; right: 0; text-align: center; font-weight: bold; color: #1e40af; font-size: 12px;">{{ form.sign[key].name }}</div>
                             <span v-else style="color: transparent;">.</span>
                           </div>
                         </div>
-                        <div style="display: flex; align-items: center; margin-top: 2px;">
-                          <span style="white-space: nowrap;">ชื่อตัวบรรจง</span>
-                          <div style="margin-left: 4px; border-bottom: 0.5px dotted black; font-weight: bold; min-width: 100px; padding: 0 4px;">{{ form.sign[key].printedName }}</div>
+                        <div style="display: flex; align-items: flex-end; margin-top: 4px; width: 100%;">
+                          <span style="white-space: nowrap; padding-bottom: 2px;">ชื่อตัวบรรจง</span>
+                          <div style="margin-left: 6px; border-bottom: 1px solid black; font-weight: bold; min-width: 100px; padding: 0 6px 2px 6px; flex: 1; text-align: center;">{{ form.sign[key].printedName }}</div>
                         </div>
-                        <div style="margin-top: 2px; font-weight: bold; padding-left: 4px;">{{ role }}</div>
-                        <div style="display: flex; align-items: center; margin-top: 2px;">
-                          <span style="white-space: nowrap;">วันที่</span>
-                          <div style="margin-left: 8px; font-weight: bold;">{{ formatDateOnly(form.sign[key].date) }}</div>
+                        <div style="margin-top: 6px; font-weight: bold; text-align: center; width: 100%;">{{ role }}</div>
+                        <div style="display: flex; align-items: flex-end; margin-top: 4px; width: 100%;">
+                          <span style="white-space: nowrap; padding-bottom: 2px;">วันที่</span>
+                          <div style="margin-left: 10px; border-bottom: 1px solid black; font-weight: bold; flex: 1; text-align: center; padding-bottom: 2px;">{{ formatDateOnly(form.sign[key].date) }}</div>
                         </div>
                       </div>
                     </div>

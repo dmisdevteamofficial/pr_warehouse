@@ -1,7 +1,9 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
+import { supabase } from '@/lib/supabase'
 import ProfileDropdown from '@/components/ui/ProfileDropdown.vue'
 import NotificationDropdown from '@/components/ui/NotificationDropdown.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
@@ -9,7 +11,9 @@ import ProfileEditSidebar from '@/components/layout/ProfileEditSidebar.vue'
 
 // 1. Core Stores & Refs
 const auth = useAuthStore()
+const ui = useUiStore()
 const route = useRoute()
+const router = useRouter()
 const isDark = ref(false)
 const isMenuOpen = ref(false)
 const showConfirmLogout = ref(false)
@@ -86,6 +90,12 @@ onMounted(() => {
              :class="currentPath === '/u/create-pr' ? 'bg-blue-600 text-white' : 'hover:bg-gray-100 dark:hover:bg-slate-700'"
              :style="currentPath === '/u/create-pr' ? '' : 'color: var(--color-text-secondary)'">
             คำขอ PR
+          </router-link>
+          <router-link to="/u/inspectionuser"
+             class="px-4 py-2 rounded-full text-[13px] font-medium transition-colors"
+             :class="currentPath === '/u/inspectionuser' ? 'bg-blue-600 text-white' : 'hover:bg-gray-100 dark:hover:bg-slate-700'"
+             :style="currentPath === '/u/inspectionuser' ? '' : 'color: var(--color-text-secondary)'">
+            ใบตรวจสอบ
           </router-link>
           <router-link to="/u/history"
              class="px-4 py-2 rounded-full text-[13px] font-medium transition-colors"
@@ -167,6 +177,15 @@ onMounted(() => {
                            :style="currentPath === '/u/create-pr' ? '' : 'color: var(--color-text-secondary)'">
                 <i class="fa-solid fa-file-invoice"></i>
                 สร้างใบคำขอสั่งซื้อ (PR)
+              </router-link>
+            </li>
+            <li>
+              <router-link to="/u/inspectionuser" @click="closeMenu"
+                           class="flex items-center gap-3 px-3 py-2 rounded-lg text-[14px] transition-colors"
+                           :class="currentPath === '/u/inspectionuser' ? 'bg-blue-600 text-white hover:bg-blue-700' : 'hover:bg-gray-100 dark:hover:bg-slate-700 text-[var(--color-text-secondary)]'"
+                           :style="currentPath === '/u/inspectionuser' ? '' : 'color: var(--color-text-secondary)'">
+                <i class="fa-solid fa-file-circle-check"></i>
+                ใบตรวจสอบ
               </router-link>
             </li>
             <li>

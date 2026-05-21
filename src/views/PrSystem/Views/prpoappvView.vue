@@ -1,10 +1,99 @@
 <script setup>
 import { computed, onMounted, ref } from "vue"
 import { useTrcloudStore } from "@/stores/trcloud"
+import { supabase } from '@/lib/supabase'
+import { useAuthStore } from '@/stores/auth'
 
 const trcloudStore = useTrcloudStore()
+const auth = useAuthStore()
 const trcloudLoading = computed(() => trcloudStore.loading)
 const filter = ref("")
+
+const TRACK_STORAGE_KEY = 'trcloud_pr_relation_tracked_rows'
+const TRACK_TABLE = 'trcloud_tracking'
+const TRACK_DOC_TYPE = 'pr_relation'
+const trackedRowIds = ref(loadTrackedRowIds())
+
+function loadTrackedRowIds() {
+  try {
+    const raw = localStorage.getItem(TRACK_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function persistTrackedRowIds() {
+  localStorage.setItem(TRACK_STORAGE_KEY, JSON.stringify(trackedRowIds.value))
+}
+
+async function loadTrackedRowIdsFromCloud() {
+  try {
+    const { data, error } = await supabase
+      .from(TRACK_TABLE)
+      .select('doc_key')
+      .eq('doc_type', TRACK_DOC_TYPE)
+    if (error) throw error
+    const cloudIds = (data || []).map((r) => String(r.doc_key || '')).filter(Boolean)
+    trackedRowIds.value = [...new Set([...trackedRowIds.value, ...cloudIds])]
+    persistTrackedRowIds()
+  } catch (err) {
+    console.warn('PR Relation track cloud load failed:', err?.message || err)
+  }
+}
+
+async function setTrackedCloud(docKeys, checked) {
+  try {
+    const keys = Array.isArray(docKeys) ? docKeys : [docKeys]
+    if (checked) {
+      await supabase.from(TRACK_TABLE).delete().eq('doc_type', TRACK_DOC_TYPE).in('doc_key', keys)
+      const inserts = keys.map(k => ({
+        doc_type: TRACK_DOC_TYPE,
+        doc_key: k,
+        checked: true,
+        updated_by: auth.user?.id || null
+      }))
+      const { error: insertError } = await supabase.from(TRACK_TABLE).insert(inserts)
+      if (insertError) throw insertError
+      return
+    }
+    const { error } = await supabase
+      .from(TRACK_TABLE)
+      .delete()
+      .eq('doc_type', TRACK_DOC_TYPE)
+      .in('doc_key', keys)
+    if (error) throw error
+  } catch (err) {
+    console.warn('PR Relation track cloud sync failed:', err?.message || err)
+  }
+}
+
+function isTracked(row) {
+  const id = row.prNo
+  return id ? trackedRowIds.value.includes(id) : false
+}
+
+function toggleTracked(row, checked) {
+  const currentId = row.prNo
+  if (!currentId) return
+
+  if (checked) {
+    // Select all rows with the same PR number (though usually unique here)
+    const relatedRows = relationRows.value.filter(r => r.prNo === currentId)
+    const newIds = relatedRows.map(r => r.prNo).filter(Boolean)
+    
+    trackedRowIds.value = [...new Set([...trackedRowIds.value, ...newIds])]
+    persistTrackedRowIds()
+    setTrackedCloud(newIds, true)
+  } else {
+    // Deselect ONLY this specific PR row
+    trackedRowIds.value = trackedRowIds.value.filter((x) => x !== currentId)
+    persistTrackedRowIds()
+    setTrackedCloud(currentId, false)
+  }
+}
 
 function normalizeKey(v) {
   return String(v || "")
@@ -97,6 +186,36 @@ function getDescriptionFromTrcloudRow(r, isLineItem = false) {
     "due_date",
   ])
 
+  // ลองดึงจากรายการสินค้า (Item List) ก่อน
+  const listCandidates = [
+    r.items,
+    r.item_list,
+    r.detail_list,
+    r.details_list,
+    r.products,
+    r.lines,
+    r.rows,
+    r.result,
+    r.data,
+  ]
+
+  for (const list of listCandidates) {
+    if (Array.isArray(list) && list.length > 0) {
+      const itemNames = list
+        .map(item => {
+          if (!item || typeof item !== 'object') return null
+          return item.product_name || item.item_name || item.name || item.description || item.title || item.item || ''
+        })
+        .filter(Boolean)
+        .map(name => stripHtmlToPlainText(name))
+        .filter(Boolean)
+      
+      if (itemNames.length > 0) {
+        return [...new Set(itemNames)].join('\n')
+      }
+    }
+  }
+
   const headerTryKeys = [
     "description",
     "Description",
@@ -136,25 +255,6 @@ function getDescriptionFromTrcloudRow(r, isLineItem = false) {
     if (typeof v !== "string" || !isNonEmptyString(v)) continue
     const plain = stripHtmlToPlainText(v)
     if (plain) return plain
-  }
-
-  const listCandidates = [
-    r.items,
-    r.item_list,
-    r.detail_list,
-    r.details_list,
-    r.products,
-    r.lines,
-    r.result,
-    r.data,
-  ]
-  for (const list of listCandidates) {
-    if (!Array.isArray(list)) continue
-    for (const item of list) {
-      if (!item || typeof item !== "object") continue
-      const line = getDescriptionFromTrcloudRow(item, true)
-      if (line) return line
-    }
   }
 
   return ""
@@ -253,6 +353,7 @@ function mergeDocDateList(docNos, docDates) {
 }
 
 onMounted(() => {
+  loadTrackedRowIdsFromCloud()
   if (!trcloudStore.isLoaded) trcloudStore.fetchAll()
 })
 </script>
@@ -260,7 +361,7 @@ onMounted(() => {
 <template>
   <div>
     <div class="mb-6">
-      <h1 class="text-[20px] font-semibold" style="color: var(--color-text-primary)">สถานะเชื่อมโยง PR-PO-AP-PV</h1>
+      <h1 class="text-[20px] font-semibold" style="color: var(--color-text-primary)">สถานะเชื่อมโยง</h1>
       <p class="text-[13px] mt-0.5" style="color: var(--color-text-muted)">
         ตรวจสอบความต่อเนื่องของเอกสารว่า PR ต่อไป PO, AP และ PV ตรงกันหรือไม่
       </p>
@@ -281,26 +382,27 @@ onMounted(() => {
 
     <div class="rounded-xl border overflow-hidden" style="background: var(--color-bg-card); border-color: var(--color-border)">
       <div class="overflow-x-auto">
-        <table class="w-full text-[13px] min-w-[1100px] border-collapse">
+        <table class="w-full text-[13px] min-w-[1000px] border-collapse table-fixed">
           <thead>
             <tr style="background: var(--color-bg-body); border-bottom: 1px solid var(--color-border)">
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">PR / วันที่</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">description</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">PO / วันที่</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">AP / วันที่</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">PV / วันที่</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">Expense / วันที่</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted)">สถานะ PR</th>
+              <th class="px-4 py-3 text-left font-medium w-[130px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">PR / วันที่</th>
+              <th class="px-4 py-3 text-left font-medium w-[220px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">รายการสินค้า</th>
+              <th class="px-4 py-3 text-left font-medium w-[140px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">PO / วันที่</th>
+              <th class="px-4 py-3 text-left font-medium w-[140px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">AP / วันที่</th>
+              <th class="px-4 py-3 text-left font-medium w-[140px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">PV / วันที่</th>
+              <th class="px-4 py-3 text-left font-medium w-[150px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">Expense / วันที่</th>
+              <th class="px-4 py-3 text-left font-medium w-[90px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">สถานะ PR</th>
+              <th class="px-4 py-3 text-center font-medium w-[70px]" style="color: var(--color-text-muted)">ติดตาม</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="trcloudLoading">
-              <td colspan="7" class="px-4 py-12 text-center">
+              <td colspan="8" class="px-4 py-12 text-center">
                 <i class="fa-solid fa-circle-notch fa-spin text-2xl text-blue-500"></i>
               </td>
             </tr>
             <tr v-else-if="!relationRows.length">
-              <td colspan="7" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูลสำหรับตรวจสอบความเชื่อมโยง</td>
+              <td colspan="8" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูลสำหรับตรวจสอบความเชื่อมโยง</td>
             </tr>
             <tr
               v-for="row in relationRows"
@@ -309,42 +411,50 @@ onMounted(() => {
               style="border-bottom: 1px solid var(--color-border)"
             >
               <td
-                class="px-4 py-3 font-mono font-semibold text-cyan-600 break-words whitespace-normal align-top"
-                style="border-right: 1px solid var(--color-border); word-break: break-word"
+                class="px-4 py-3 font-mono font-semibold text-cyan-600 break-all align-top"
+                style="border-right: 1px solid var(--color-border)"
               >
                 {{ mergeDocDate(row.prNo, row.prDate) }}
               </td>
               <td
-                class="px-4 py-3 break-words whitespace-normal align-top"
-                style="color: var(--color-text-primary); border-right: 1px solid var(--color-border); word-break: break-word"
+                class="px-4 py-3 whitespace-pre-line break-words align-top"
+                style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)"
               >
                 {{ row.prDescription || "-" }}
               </td>
               <td
                 class="px-4 py-3 font-mono break-words whitespace-pre-line align-top"
-                style="color: var(--color-text-primary); border-right: 1px solid var(--color-border); word-break: break-word"
+                style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)"
               >
                 {{ mergeDocDateList(row.poNos, row.poDates) }}
               </td>
               <td
                 class="px-4 py-3 font-mono break-words whitespace-pre-line align-top"
-                style="color: var(--color-text-primary); border-right: 1px solid var(--color-border); word-break: break-word"
+                style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)"
               >
                 {{ mergeDocDateList(row.apNos, row.apDates) }}
               </td>
               <td
                 class="px-4 py-3 font-mono break-words whitespace-pre-line align-top"
-                style="color: var(--color-text-primary); border-right: 1px solid var(--color-border); word-break: break-word"
+                style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)"
               >
                 {{ mergeDocDateList(row.pvNos, row.pvDates) }}
               </td>
               <td
                 class="px-4 py-3 font-mono break-words whitespace-pre-line align-top"
-                style="color: var(--color-text-primary); border-right: 1px solid var(--color-border); word-break: break-word"
+                style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)"
               >
                 {{ mergeDocDateList(row.expNos, row.expDates) }}
               </td>
-              <td class="px-4 py-3 break-words whitespace-normal align-top" style="color: var(--color-text-primary); word-break: break-word">{{ row.prStatus || "-" }}</td>
+              <td class="px-4 py-3 break-words whitespace-normal align-top" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ row.prStatus || "-" }}</td>
+              <td class="px-4 py-3 text-center align-top">
+                <input
+                  type="checkbox"
+                  class="w-4 h-4 accent-blue-600 cursor-pointer"
+                  :checked="isTracked(row)"
+                  @change="toggleTracked(row, $event.target.checked)"
+                />
+              </td>
             </tr>
           </tbody>
         </table>

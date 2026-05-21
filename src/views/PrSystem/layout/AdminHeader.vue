@@ -3,11 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue"
 import { useRouter } from "vue-router"
 import ProfileEditSidebar from "@/components/layout/ProfileEditSidebar.vue"
 import { useTrcloudStore } from "@/stores/trcloud"
-import {
-  getTrcloudProxyCookie,
-  setTrcloudProxyCookie,
-  clearTrcloudProxyCookie,
-} from "@/utils/trcloudSession"
 
 const emit = defineEmits(["logout", "edit-profile", "toggle-sidebar"])
 
@@ -36,51 +31,11 @@ const now = ref(new Date())
 const isCompact = ref(window.matchMedia("(max-width: 640px)").matches)
 const switchOpen = ref(false)
 const showEditProfile = ref(false)
-const showTrcloudCookieModal = ref(false)
-const trcloudCookieDraft = ref("")
-const hasTrcloudProxyCookie = ref(false)
 const notificationReadMap = ref({})
 const NOTIFICATION_READ_STORAGE_KEY = "mw-prsystem-notification-read-map-v1"
 const weeklyExpandState = ref({ PR: false, PO: false, AP: false })
 const expandedNotificationIds = ref({})
 const expandedWeeklySummaryIds = ref({})
-
-function refreshTrcloudCookieFlag() {
-  hasTrcloudProxyCookie.value = !!getTrcloudProxyCookie()
-}
-
-function openTrcloudCookieModal() {
-  menuOpen.value = false
-  notificationsOpen.value = false
-  switchOpen.value = false
-  trcloudCookieDraft.value = getTrcloudProxyCookie()
-  showTrcloudCookieModal.value = true
-}
-
-function closeTrcloudCookieModal() {
-  showTrcloudCookieModal.value = false
-}
-
-async function saveTrcloudCookie() {
-  setTrcloudProxyCookie(trcloudCookieDraft.value)
-  refreshTrcloudCookieFlag()
-  closeTrcloudCookieModal()
-  try {
-    await trcloudStore.fetchAll({ force: true })
-  } catch (_) {
-    /* fetchAll handles errors internally */
-  }
-}
-
-async function clearTrcloudCookieAndRefetch() {
-  clearTrcloudProxyCookie()
-  refreshTrcloudCookieFlag()
-  trcloudCookieDraft.value = ""
-  closeTrcloudCookieModal()
-  try {
-    await trcloudStore.fetchAll({ force: true })
-  } catch (_) {}
-}
 
 const dateTimeText = computed(() => {
   const formatter = new Intl.DateTimeFormat(
@@ -355,8 +310,6 @@ onMounted(() => {
     }
   } catch (_) {}
 
-  refreshTrcloudCookieFlag()
-  window.addEventListener("mw-trcloud-proxy-cookie-changed", refreshTrcloudCookieFlag)
   timerId = window.setInterval(() => {
     now.value = new Date()
   }, 1000)
@@ -369,7 +322,6 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener("mw-trcloud-proxy-cookie-changed", refreshTrcloudCookieFlag)
   window.clearInterval(timerId)
   window.removeEventListener("resize", onResize)
   window.removeEventListener("pointerdown", onPointerDown)
@@ -411,21 +363,6 @@ onBeforeUnmount(() => {
       >
         <i v-if="isDark" class="fa-solid fa-sun text-[18px]"></i>
         <i v-else class="fa-solid fa-moon text-[18px]"></i>
-      </button>
-
-      <button
-        type="button"
-        class="relative text-gray-600 hover:text-gray-900 bg-gray-100 dark:text-gray-400 dark:hover:text-white dark:bg-gray-800 rounded-lg p-1.5 transition"
-        title="ตั้งค่า Cookie TRCloud (หลังล็อกอินเว็บไซต์ TRCloud)"
-        aria-label="ตั้งค่า Cookie TRCloud"
-        @click="openTrcloudCookieModal"
-      >
-        <i class="fa-solid fa-cloud text-[18px]"></i>
-        <span
-          v-if="!hasTrcloudProxyCookie"
-          class="absolute top-0.5 right-0.5 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-white dark:ring-gray-950"
-          aria-hidden="true"
-        />
       </button>
 
       <div ref="notificationsRef" class="relative">
@@ -701,79 +638,5 @@ onBeforeUnmount(() => {
       :show="showEditProfile"
       @close="showEditProfile = false"
     />
-
-    <Teleport to="body">
-      <div
-        v-if="showTrcloudCookieModal"
-        class="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/50"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="trcloud-cookie-title"
-        @click.self="closeTrcloudCookieModal"
-      >
-        <div
-          class="w-full max-w-lg rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shadow-2xl overflow-hidden"
-          @click.stop
-        >
-          <div class="px-5 py-4 border-b border-gray-200 dark:border-gray-800">
-            <h2
-              id="trcloud-cookie-title"
-              class="text-base font-semibold text-gray-900 dark:text-white"
-            >
-              เชื่อมต่อข้อมูล TRCloud
-            </h2>
-            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1 leading-relaxed">
-              วางค่า Cookie จากเบราว์เซอร์หลังล็อกอิน
-              <span class="font-mono text-[11px]">thaidrill.trcloud.co</span>
-              (ส่วน <span class="font-mono">PHPSESSID</span> และ
-              <span class="font-mono">trcloud</span> จำเป็นบ่อยที่สุด) จากนั้นกดตกลง ระบบจะดึง PR/PO/AP/PV ใหม่
-              — ไม่ต้องแก้ไฟล์โค้ดหรือ .env
-            </p>
-            <p class="text-[11px] text-amber-700 dark:text-amber-400 mt-2">
-              ใช้งานกับ <span class="font-semibold">npm run dev</span> (Vite proxy) เท่านั้น;
-              โหมด build/static ต้องมีเซิร์ฟเวอร์ proxy แยก
-            </p>
-          </div>
-          <div class="px-5 py-4 space-y-3">
-            <label class="block text-xs font-medium text-gray-700 dark:text-gray-300">
-              Cookie string
-            </label>
-            <textarea
-              v-model="trcloudCookieDraft"
-              rows="5"
-              class="w-full rounded-xl border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 text-xs font-mono p-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none resize-y min-h-[120px]"
-              placeholder="PHPSESSID=...; trcloud=...; ..."
-              autocomplete="off"
-              spellcheck="false"
-            />
-          </div>
-          <div
-            class="px-5 py-4 border-t border-gray-200 dark:border-gray-800 flex flex-col-reverse sm:flex-row sm:justify-end gap-2"
-          >
-            <button
-              type="button"
-              class="w-full sm:w-auto px-4 py-2.5 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 transition"
-              @click="closeTrcloudCookieModal"
-            >
-              ปิด
-            </button>
-            <button
-              type="button"
-              class="w-full sm:w-auto px-4 py-2.5 rounded-xl text-sm font-medium text-red-700 dark:text-red-300 bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:hover:bg-red-900/30 transition"
-              @click="clearTrcloudCookieAndRefetch"
-            >
-              ล้างค่าในระบบนี้
-            </button>
-            <button
-              type="button"
-              class="w-full sm:w-auto px-4 py-2.5 rounded-xl text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 transition"
-              @click="saveTrcloudCookie"
-            >
-              ตกลง และโหลดข้อมูลใหม่
-            </button>
-          </div>
-        </div>
-      </div>
-    </Teleport>
   </header>
 </template>

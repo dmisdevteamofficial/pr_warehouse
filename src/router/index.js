@@ -13,6 +13,7 @@ import UserLogsLisView from '@/views/userLogsLisView.vue'
 import ImportMoreListView from '@/views/ImportMoreListView.vue'
 import SummaryDetailView from '@/views/summary_detailView.vue'
 import InspectionView from '@/views/inspectionView.vue'
+import InspectionItemsView from '@/views/inspection_itemsView.vue'
 import HomepageView from '@/views/localState/users/HomepageView.vue'
 import CreateOrderView from '@/views/localState/users/CreateOrderView.vue'
 import CreatePRView from '@/views/localState/users/CreatePRView.vue'
@@ -22,6 +23,10 @@ import PrAdminView from '@/views/PrSystem/AdminView.vue'
 // PrSystem Views
 import SystemadminLisView from '@/views/PrSystem/Views/SystemadminLisView.vue'
 import AdminLogsView from '@/views/PrSystem/Views/adminLogsView.vue'
+// LocalState Views
+import InspectionUser from '@/views/localState/users/inspectionUser.vue'
+
+
 
 const routes = [
   { path: '/', component: LoginView, meta: { requiresAuth: false } },
@@ -38,7 +43,7 @@ const routes = [
   { path: '/logs', component: UserLogsLisView, meta: { requiresAuth: true, isAdmin: true } },
   { path: '/imports', component: ImportMoreListView, meta: { requiresAuth: true, isAdmin: true } },
   { path: '/return', component: InspectionView, meta: { requiresAuth: true, isAdmin: true } },
-  { path: '/return-history', component: InspectionView, meta: { requiresAuth: true, isAdmin: true } },
+  { path: '/return-history', component: InspectionItemsView, meta: { requiresAuth: true, isAdmin: true } },
   { path: '/u/home', component: HomepageView, meta: { requiresAuth: true } },
   { path: '/u/create', component: CreateOrderView, meta: { requiresAuth: true } },
   { path: '/u/create-pr', component: CreatePRView, meta: { requiresAuth: true } },
@@ -48,6 +53,8 @@ const routes = [
   // PrSystem Routes
   { path: '/pr/system-admins', component: SystemadminLisView, meta: { requiresAuth: true, isSuperAdmin: true, isAdmin: true } },
   { path: '/pr/logs-usage', component: AdminLogsView, meta: { requiresAuth: true, isSuperAdmin: true, isAdmin: true } },
+  // LocalState Routes
+  { path: '/u/inspectionuser', component: InspectionUser, meta: { requiresAuth: true } },
 ]
 
 const router = createRouter({

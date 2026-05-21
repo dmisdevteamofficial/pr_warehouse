@@ -1,0 +1,224 @@
+import requests
+import json
+import pandas as pd
+import logging
+from typing import List, Dict, Any
+
+# ==========================================
+# ⚙️ ตั้งค่าการบันทึก Log
+# ==========================================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+# ==========================================
+# 🔐 ข้อมูลยืนยันตัวตน (แก้ไขค่าตรงนี้ก่อนรันทุกครั้ง)
+# ==========================================
+COMPANY_ID = "25"
+PASSKEY    = "6a05946b357765415b4c931d2122a8c8"
+
+# ⚠️ อัปเดต Cookie ทุกครั้งก่อนรัน
+RAW_COOKIE = "trcloud=0e218c475357ad43e7bcc689924d3ce6; u=221; h1=15ffc214a36d0f9afb910addab09bbad; h2=9ef0b36f878df4acf9031d8d17a4f71a; PHPSESSID=oi9eaql2pd9dnd5kgmk6aigaq6"
+
+# ==========================================
+# 🔗 จุดเชื่อมต่อ API (Endpoints)
+# ==========================================
+BASE_URL    = "https://thaidrill.trcloud.co"
+PO_ENDPOINT = f"{BASE_URL}/application/expense_report/api/engine-po/po_list.php"
+# ✅ เปลี่ยน AP Endpoint เป็นตัวใหม่ตามที่ให้มา
+AP_ENDPOINT = f"{BASE_URL}/application/expense_report/api/engine-report/invoice_by_supplier.php" 
+
+# ==========================================
+# 📦 Class หลักสำหรับดึงข้อมูล
+# ==========================================
+class TRCloudReportFetcher:
+
+    def __init__(self, company_id: str, passkey: str, raw_cookie: str): 
+        self.company_id = company_id
+        self.passkey    = passkey
+        self.session    = requests.Session()
+        
+        self.session.headers.update({
+            "Content-Type":     "application/x-www-form-urlencoded",
+            "Accept":           "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer":          f"{BASE_URL}/application/expense_report/invoice_by_supplier.php", # ปรับ Referer อิงตามหน้า AP ใหม่
+            "Origin":           BASE_URL,
+            "User-Agent":       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Cookie":           raw_cookie,
+        })
+
+    def fetch_po(self, date_from: str, date_to: str, **kwargs) -> List[Dict[str, Any]]:
+        """ดึงข้อมูลรายงานใบสั่งซื้อ (PO)"""
+        payload = {
+            "company_id":      self.company_id,
+            "passkey":         self.passkey,
+            "from":            date_from,
+            "to":              date_to,
+            "status_new":      kwargs.get("status_new", 1),
+            "status_partial":  kwargs.get("status_partial", 1),
+            "status_success":  kwargs.get("status_success", 1),
+            "status_confirm":  kwargs.get("status_confirm", 1),
+            "status_rejected": kwargs.get("status_rejected", 0),
+            "status_force":    kwargs.get("status_force", 1),
+            "status_sent":     kwargs.get("status_sent", 0),
+            "status_email":    kwargs.get("status_email", 0),
+            "date_type":       kwargs.get("date_type", "issue_date"),
+            "remain_status":   kwargs.get("remain_status", ""),
+            "sales_from":      kwargs.get("sales_from", "*"),
+            "sales_to":        kwargs.get("sales_to", "*"),
+            "project":         kwargs.get("project", "*"),
+            "department":      kwargs.get("department", "*"),
+            "keyword":         kwargs.get("keyword", ""),
+        }
+        return self._fetch_paginated(PO_ENDPOINT, "PO", payload)
+
+    def fetch_ap_invoice(self, date_from: str, date_to: str, **kwargs) -> List[Dict[str, Any]]:
+        """ดึงข้อมูลรายงาน AP ตัวใหม่ (ยอดซื้อ - ตามผู้ขาย/เอกสาร/สินค้า)"""
+        payload = {
+            "company_id":       self.company_id,
+            "passkey":          self.passkey,
+            "date_type":        kwargs.get("date_type", "issue_date"),
+            "from":             date_from,
+            "to":               date_to,
+            "staff_from":       kwargs.get("staff_from", "*"),
+            "staff_to":         kwargs.get("staff_to", "*"),
+            "project":          kwargs.get("project", "*"),
+            "department":       kwargs.get("department", "*"),
+            "keyword":          kwargs.get("keyword", ""),
+            "product_category": kwargs.get("product_category", "*"),
+            "contact_group":    kwargs.get("contact_group", "*"),
+            "status_debtor":    kwargs.get("status_debtor", True),  # Python True -> JSON true
+            "status_paid":      kwargs.get("status_paid", True),
+            "status_overdue":   kwargs.get("status_overdue", True),
+            "credit_note":      kwargs.get("credit_note", False),
+            "contact_id":       kwargs.get("contact_id", 0)
+        }
+        return self._fetch_paginated(AP_ENDPOINT, "AP_Invoice", payload)
+
+    def _fetch_paginated(self, endpoint: str, report_name: str, base_payload: dict) -> List[Dict[str, Any]]:
+        """ฟังก์ชันแกนหลักสำหรับจัดการ Pagination"""
+        all_records = []
+        start_page  = 0
+        logging.info(f"🚀 เริ่มดึงข้อมูล {report_name}")
+
+        while True:
+            payload   = {**base_payload, "start": start_page}
+            form_data = {"json": json.dumps(payload, ensure_ascii=False)}
+            
+            try:
+                r = self.session.post(endpoint, data=form_data, timeout=30)
+                r.raise_for_status()
+                data = r.json()
+                
+                if data.get("success") != 1:
+                    logging.error(f"❌ API Error ({report_name}): {data.get('message')}")
+                    break
+                    
+                results = data.get("result", [])
+                if not results:
+                    break
+                    
+                all_records.extend(results)
+                logging.info(f"✅ {report_name} หน้า {start_page} | {len(results)} records | รวม: {len(all_records)}")
+                
+                if len(results) < 50:
+                    break
+                    
+                start_page += 1
+                
+            except requests.exceptions.RequestException as e:
+                logging.error(f"❌ Network Error ({report_name}) หน้า {start_page}: {e}")
+                break
+            except json.JSONDecodeError:
+                logging.error(f"❌ อ่าน JSON ไม่ได้ (Session อาจหมดอายุ กรุณา Copy Cookie มาวางใหม่)")
+                break
+
+        logging.info(f"🎉 {report_name} เสร็จสิ้น ได้ {len(all_records)} รายการ")
+        return all_records
+
+    def format_dataframe(self, data: List[Dict[str, Any]], report_type: str) -> pd.DataFrame:
+        """แปลง Data เป็น DataFrame และจัดคอลัมน์ให้สวยงามก่อนเซฟ"""
+        if not data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data)
+
+        if report_type == "PO":
+            doc_col      = "po_number"
+            num_col      = "document_number"
+            priority_cols = [
+                doc_col, 'issue_date', 'po_id', 'document_number', 'status',
+                'name', 'organization', 'project', 'department', 'description',
+                'price', 'quantity', 'unit', 'total', 'vat', 'grand_total'
+            ]
+        else:  # โหมด AP_Invoice ตัวใหม่
+            doc_col      = "doc_number"
+            num_col      = "invoice_number"
+            priority_cols = [
+                doc_col, 'issue_date', 'due_date', 'reference', 'contact_type', 'name', 
+                'organization', 'project', 'category', 'product_id', 'description', 
+                'quantity', 'price', 'rate', 'before_vat', 'total', 'item_total'
+            ]
+
+        # สร้างคอลัมน์เลขที่เอกสารรวม (ป้องกัน Error จากค่าว่าง)
+        if "company_format" in df.columns and num_col in df.columns:
+            df[doc_col] = df["company_format"].fillna("").astype(str) + df[num_col].fillna("").astype(str)
+        elif num_col in df.columns:
+            df[doc_col] = df[num_col].fillna("").astype(str)
+
+        # จัดเรียงคอลัมน์สำคัญไว้ด้านหน้า
+        existing = [c for c in priority_cols if c in df.columns]
+        others   = [c for c in df.columns if c not in existing]
+        df = df[existing + others]
+        
+        return df
+
+    def export_to_excel_combined(self, po_data: List[Dict[str, Any]], ap_data: List[Dict[str, Any]], filename: str):
+        """บันทึกข้อมูลทั้งหมดลงไฟล์ Excel ไฟล์เดียว แยกชีทกัน"""
+        if not po_data and not ap_data:
+            logging.warning("⚠️ ไม่มีข้อมูลสำหรับบันทึกเลย")
+            return
+
+        df_po = self.format_dataframe(po_data, "PO")
+        df_ap = self.format_dataframe(ap_data, "AP_Invoice")
+
+        try:
+            # ใช้ ExcelWriter เพื่อเขียนหลาย Sheet
+            with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+                if not df_po.empty:
+                    df_po.to_excel(writer, sheet_name='PO_Report', index=False)
+                    logging.info(f"📝 เพิ่มข้อมูล PO ลงในชีท 'PO_Report' ({len(df_po)} rows)")
+                if not df_ap.empty:
+                    df_ap.to_excel(writer, sheet_name='AP_Invoice', index=False)
+                    logging.info(f"📝 เพิ่มข้อมูล AP ลงในชีท 'AP_Invoice' ({len(df_ap)} rows)")
+
+            logging.info(f"💾 บันทึกไฟล์ Excel รวมสำเร็จ: {filename}")
+        except Exception as e:
+            logging.error(f"❌ บันทึกไฟล์ Excel ไม่ได้: {e} (แนะนำให้เช็คว่าลง openpyxl หรือยัง)")
+
+
+# ==========================================
+# 🚀 จุดเรียกใช้งานโปรแกรม (Entry Point)
+# ==========================================
+if __name__ == "__main__": 
+    fetcher = TRCloudReportFetcher(COMPANY_ID, PASSKEY, RAW_COOKIE)
+
+    # กำหนดช่วงวันที่ที่ต้องการดึงข้อมูล
+    DATE_FROM = "2026-01-01"
+    DATE_TO   = "2026-05-31"
+
+    # 1. ดึงข้อมูลรายงาน PO
+    po_records = fetcher.fetch_po(date_from=DATE_FROM, date_to=DATE_TO)
+
+    # 2. ดึงข้อมูลรายงาน AP ตัวใหม่
+    ap_records = fetcher.fetch_ap_invoice(date_from=DATE_FROM, date_to=DATE_TO)
+
+    # 3. บันทึกลงไฟล์ Excel แยกชีท
+    fetcher.export_to_excel_combined(
+        po_data=po_records, 
+        ap_data=ap_records, 
+        filename="TRCloud_Master_Report.xlsx"
+    )
