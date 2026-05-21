@@ -65,6 +65,8 @@ export async function onRequest(context) {
     referer = 'https://thaidrill.trcloud.co/application/expense_report/invoice_by_supplier.php';
   } else if (pathLower.includes('/engine-po/') || pathLower.includes('/engine-pr/') || pathLower.includes('/engine-expense/')) {
     referer = 'https://thaidrill.trcloud.co/application/expense/';
+  } else if (pathLower.includes('/engine-payment/')) {
+    referer = 'https://thaidrill.trcloud.co/application/finance/';
   }
   newHeaders.set('Referer', referer);
   newHeaders.set('X-Requested-With', 'XMLHttpRequest');

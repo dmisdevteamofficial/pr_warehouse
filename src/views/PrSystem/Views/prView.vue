@@ -28,7 +28,21 @@ const trcloudDateTo = computed({
   set: (val) => trcloudStore.dateTo = val
 })
 const trcloudFilter = ref('')
-const viewMode = ref('all') // 'all' or 'tracking'
+const _viewMode = ref('all')
+
+// ✅ เมื่อสลับไปหน้า 'tracking' ให้ rebuild frozenOrder ใหม่
+//    → tracked rows ขึ้นบนสุด เรียงตามลำดับที่ติ๊กล่าสุด
+//    เมื่อสลับกลับ 'all' ก็ rebuild ด้วยเพื่อรีเซ็ตลำดับปกติ
+const viewMode = computed({
+  get: () => _viewMode.value,
+  set: (val) => {
+    _viewMode.value = val
+    // rebuild ด้วย rows ปัจจุบันทันที
+    if (trcloudStore.prRows.length) {
+      buildFrozenOrder(trcloudStore.prRows)
+    }
+  }
+})
 const projectFilter = ref('')
 const statusFilter = ref('')
 const monthFilter = ref('')
@@ -50,6 +64,41 @@ const TRACK_STORAGE_KEY = 'trcloud_pr_tracked_rows'
 const TRACK_TABLE = 'trcloud_tracking'
 const TRACK_DOC_TYPE = 'pr'
 const trackedRowIds = ref(loadTrackedRowIds())
+
+// ─── frozenOrder: lock การเรียงลำดับระหว่าง session ───────────────────────────
+// สร้างครั้งแรกตอน rows โหลดมา หรือตอน fetch ใหม่
+// ตอนติ๊ก checkbox จะไม่ rebuild → row ไม่กระโดด
+const frozenOrder = ref([])
+const frozenOrderReady = ref(false)
+
+function buildFrozenOrder(rows) {
+  const tracked = trackedRowIds.value
+  const isTracking = _viewMode.value === 'tracking'
+
+  const sorted = [...rows].sort((a, b) => {
+    const dA = a.issue_date || a.date || ''
+    const dB = b.issue_date || b.date || ''
+
+    if (!isTracking) {
+      // "ข้อมูลทั้งหมด": เรียงวันที่ล่าสุดปกติ ไม่ดึง tracked ขึ้นบน
+      return dB.localeCompare(dA)
+    }
+
+    // "ติดตามงาน": tracked ขึ้นบนสุด เรียงตามลำดับที่ติ๊กล่าสุดก่อน
+    const idA = getRowIdentity(a)
+    const idB = getRowIdentity(b)
+    const tA = tracked.indexOf(idA)
+    const tB = tracked.indexOf(idB)
+    if (tA !== -1 && tB !== -1) return tA - tB
+    if (tA !== -1) return -1
+    if (tB !== -1) return 1
+    return dB.localeCompare(dA)
+  })
+
+  frozenOrder.value = sorted.map(r => getRowIdentity(r))
+  frozenOrderReady.value = true
+}
+// ──────────────────────────────────────────────────────────────────────────────
 
 function loadTrackedRowIds() {
   try {
@@ -74,10 +123,32 @@ async function loadTrackedRowIdsFromCloud() {
       .eq('doc_type', TRACK_DOC_TYPE)
     if (error) throw error
     const cloudIds = (data || []).map((r) => String(r.doc_key || '')).filter(Boolean)
-    trackedRowIds.value = [...new Set([...trackedRowIds.value, ...cloudIds])]
+    
+    // ใช้ข้อมูลจาก Cloud เป็นหลัก
+    trackedRowIds.value = cloudIds
+    
+    // ล้างข้อมูลที่ไม่มีอยู่ในตารางแล้ว (Cleanup)
+    cleanupTrackedIds()
+    
     persistTrackedRowIds()
   } catch (err) {
     console.warn('PR track cloud load failed, fallback to local:', err?.message || err)
+  }
+}
+
+// ฟังก์ชันสำหรับล้าง ID ที่ไม่มีอยู่ในข้อมูลปัจจุบันแล้ว
+function cleanupTrackedIds() {
+  if (trcloudStore.prRows.length === 0) return
+  
+  const currentIds = new Set(trcloudStore.prRows.map(r => getRowIdentity(r)))
+  const validTrackedIds = trackedRowIds.value.filter(id => currentIds.has(id))
+  
+  if (validTrackedIds.length !== trackedRowIds.value.length) {
+    trackedRowIds.value = validTrackedIds
+    // ถ้ามีการเปลี่ยนแปลงลำดับ ให้ rebuild frozenOrder ด้วย
+    if (frozenOrderReady.value) {
+      buildFrozenOrder(trcloudStore.prRows)
+    }
   }
 }
 
@@ -85,7 +156,6 @@ async function setTrackedCloud(docKeys, checked) {
   try {
     const keys = Array.isArray(docKeys) ? docKeys : [docKeys]
     if (checked) {
-      // Keep one active row per (doc_type, doc_key) without relying on unique index.
       await supabase.from(TRACK_TABLE).delete().eq('doc_type', TRACK_DOC_TYPE).in('doc_key', keys)
       const inserts = keys.map(k => ({
         doc_type: TRACK_DOC_TYPE,
@@ -128,8 +198,16 @@ const trcloudKpi = computed(() => {
 })
 
 async function fetchTrcloudData() {
-  await trcloudStore.fetchTrcloudData('pr')
+  // reset frozenOrder ก่อน fetch → จะ rebuild ใหม่หลังข้อมูลมา
+  frozenOrderReady.value = false
+  await trcloudStore.fetchTrcloudData('pr', { force: true })
+  cleanupTrackedIds()
 }
+
+// ล้างข้อมูลทุกครั้งที่ข้อมูลใน Store เปลี่ยนแปลง
+watch(() => trcloudStore.prRows, () => {
+  cleanupTrackedIds()
+}, { deep: true })
 
 onMounted(() => {
   loadTrackedRowIdsFromCloud()
@@ -141,10 +219,12 @@ onMounted(() => {
 watch(
   () => trcloudStore.prRows,
   (rows) => {
+    if (!rows.length) return
+
     const activeRowsById = new Map(rows.map((r) => [getRowIdentity(r), r]))
     const nextTracked = trackedRowIds.value.filter((id) => {
       const row = activeRowsById.get(id)
-      if (!row) return true
+      if (!row) return false
       return !isSuccessStatus(row.status)
     })
     if (nextTracked.length !== trackedRowIds.value.length) {
@@ -153,16 +233,20 @@ watch(
       persistTrackedRowIds()
       setTrackedCloud(removedIds, false)
     }
+
+    // ✅ build frozenOrder เมื่อข้อมูลมาใหม่ (mount ครั้งแรก หรือ fetch ใหม่)
+    // แต่จะไม่ถูกเรียกตอนแค่ติ๊ก checkbox เพราะ prRows ไม่เปลี่ยน
+    buildFrozenOrder(rows)
   },
   { immediate: true, deep: true }
 )
 
 const filteredTrcloudRows = computed(() => {
-  let rows = trcloudStore.prRows
+  let result = trcloudStore.prRows
 
   // Filter by Date (Client-side)
   if (trcloudDateFrom.value || trcloudDateTo.value) {
-    rows = rows.filter(r => {
+    result = result.filter(r => {
       const docDate = r.issue_date || r.date || r.issueDate
       if (!docDate) return true
       if (trcloudDateFrom.value && docDate < trcloudDateFrom.value) return false
@@ -171,62 +255,57 @@ const filteredTrcloudRows = computed(() => {
     })
   }
 
-  // Filter by View Mode (Tracking excludes Success)
+  // Filter by View Mode (Tracking: Show all non-success items)
   if (viewMode.value === 'tracking') {
-    rows = rows.filter(r => {
+    result = result.filter(r => {
       const s = (r.status || '').toLowerCase()
-      return !s.includes('success') && !s.includes('เสร็จสิ้น') && !s.includes('เรียบร้อย')
+      const isSuccess = s.includes('success') || s.includes('เสร็จสิ้น') || s.includes('เรียบร้อย') || s.includes('สำเร็จ')
+      return !isSuccess
     })
   }
 
   // Filter by Project
   if (projectFilter.value) {
-    rows = rows.filter(r => r.project === projectFilter.value)
+    result = result.filter(r => r.project === projectFilter.value)
   }
 
   // Filter by Status
   if (statusFilter.value) {
-    rows = rows.filter(r => r.status === statusFilter.value)
+    result = result.filter(r => r.status === statusFilter.value)
   }
 
   // Filter by Month
   if (monthFilter.value) {
-    rows = rows.filter(r => getDocMonth(r) === monthFilter.value)
+    result = result.filter(r => getDocMonth(r) === monthFilter.value)
   }
 
   // Search filter
   const q = trcloudFilter.value.toLowerCase().trim()
   if (q) {
-    rows = rows.filter(r => 
+    result = result.filter(r =>
       JSON.stringify(r).toLowerCase().includes(q)
     )
   }
 
-  // Sort by Tracking status first, then by Date Descending
-  return [...rows].sort((a, b) => {
-    // If in tracking mode, show tracked items at the top
-    if (viewMode.value === 'tracking') {
-      const idA = getRowIdentity(a)
-      const idB = getRowIdentity(b)
-      const trackedA = trackedRowIds.value.indexOf(idA)
-      const trackedB = trackedRowIds.value.indexOf(idB)
+  // ✅ เรียงตาม frozenOrder (snapshot ตอน mount/fetch) → ติ๊กแล้วไม่กระโดด
+  if (frozenOrderReady.value && frozenOrder.value.length) {
+    const orderMap = new Map(frozenOrder.value.map((id, i) => [id, i]))
+    return [...result].sort((a, b) => {
+      const ia = orderMap.get(getRowIdentity(a)) ?? 99999
+      const ib = orderMap.get(getRowIdentity(b)) ?? 99999
+      if (ia !== ib) return ia - ib
+      // rows ใหม่ที่ไม่อยู่ใน frozenOrder → เรียงตามวันที่
+      const dA = a.issue_date || a.date || ''
+      const dB = b.issue_date || b.date || ''
+      return dB.localeCompare(dA)
+    })
+  }
 
-      // Both are tracked: sort by their order in trackedRowIds (most recent first)
-      if (trackedA !== -1 && trackedB !== -1) {
-        return trackedA - trackedB
-      }
-      
-      // Only A is tracked: A comes first
-      if (trackedA !== -1) return -1
-      
-      // Only B is tracked: B comes first
-      if (trackedB !== -1) return 1
-    }
-
-    // Default: sort by Date Descending
-    const dateA = a.issue_date || a.date || ''
-    const dateB = b.issue_date || b.date || ''
-    return dateB.localeCompare(dateA)
+  // fallback ถ้า frozenOrder ยังไม่พร้อม
+  return [...result].sort((a, b) => {
+    const dA = a.issue_date || a.date || ''
+    const dB = b.issue_date || b.date || ''
+    return dB.localeCompare(dA)
   })
 })
 
@@ -269,7 +348,7 @@ function getDocMonth(row) {
 }
 
 function getRowIdentity(row) {
-  return String(row.document_number || row.pr_id || row.id || '')
+  return String(row.unique_id || row.document_number || row.pr_id || row.id || '')
 }
 
 function isSuccessStatus(status) {
@@ -282,21 +361,31 @@ function isTracked(row) {
   return id ? trackedRowIds.value.includes(id) : false
 }
 
+// ✅ toggleTracked: เลือก siblings อัตโนมัติเมื่อติ๊กถูก แต่ยกเลิกทีละรายการเมื่อติ๊กออก
+// ลำดับแถวจะคงที่ (Frozen) จนกว่าจะโหลดหน้าใหม่
 function toggleTracked(row, checked) {
   const currentId = getRowIdentity(row)
+  const docNum = row.document_number || row.pr_id || ''
   if (!currentId) return
 
   if (checked) {
-    // Select all rows with the same document number
-    const relatedRows = trcloudStore.prRows.filter(r => getRowIdentity(r) === currentId)
-    const newIds = relatedRows.map(getRowIdentity).filter(Boolean)
+    // 1. ติ๊กถูก: เลือกทุกรายการที่มีเลขที่เอกสารเดียวกัน
+    const siblings = trcloudStore.prRows.filter(r => (r.document_number || r.pr_id) === docNum)
+    const siblingIds = siblings.map(r => getRowIdentity(r)).filter(Boolean)
     
-    trackedRowIds.value = [...new Set([currentId, ...trackedRowIds.value, ...newIds])]
+    // เพิ่มเข้า trackedRowIds (ใหม่ขึ้นบนสุดของ list)
+    trackedRowIds.value = [...new Set([...siblingIds, ...trackedRowIds.value])]
+    
+    // หมายเหตุ: ไม่แก้ frozenOrder ที่นี่ เพื่อให้แถวไม่กระโดด
+    
     persistTrackedRowIds()
-    setTrackedCloud(newIds, true)
+    setTrackedCloud(siblingIds, true)
   } else {
-    // Deselect ONLY this specific row
+    // 2. ติ๊กออก: ยกเลิกเฉพาะรายการที่กดเท่านั้น
     trackedRowIds.value = trackedRowIds.value.filter((x) => x !== currentId)
+    
+    // หมายเหตุ: ไม่แก้ frozenOrder ที่นี่
+    
     persistTrackedRowIds()
     setTrackedCloud(currentId, false)
   }
@@ -349,7 +438,7 @@ function getDisplayBadgeInfo(row) {
       </button>
     </div>
 
-    <!-- TRCLOUD Section Only -->
+    <!-- KPI Card -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
       <div class="p-4 rounded-xl border relative overflow-hidden" style="background: var(--color-bg-card); border-color: var(--color-border)">
         <div class="absolute top-0 left-0 w-full h-1 bg-blue-500"></div>
@@ -363,6 +452,7 @@ function getDisplayBadgeInfo(row) {
       </div>
     </div>
 
+    <!-- Filters -->
     <div class="flex flex-col gap-4 mb-6 p-4 rounded-xl border" style="background: var(--color-bg-card); border-color: var(--color-border)">
       <div class="flex flex-wrap items-center gap-4">
         <div class="flex items-center gap-2">
@@ -373,7 +463,7 @@ function getDisplayBadgeInfo(row) {
           <label class="text-[12px] font-medium" style="color: var(--color-text-muted)">ถึง</label>
           <input v-model="trcloudDateTo" type="date" class="px-3 py-1.5 bg-transparent border rounded-lg text-[13px] focus:outline-none" style="border-color: var(--color-border); color: var(--color-text-primary)" />
         </div>
-        
+
         <!-- Project Filter -->
         <div class="flex items-center gap-2">
           <label class="text-[12px] font-medium" style="color: var(--color-text-muted)">โครงการ</label>
@@ -411,6 +501,7 @@ function getDisplayBadgeInfo(row) {
       </div>
     </div>
 
+    <!-- Table -->
     <div class="rounded-xl border overflow-hidden" style="background: var(--color-bg-card); border-color: var(--color-border)">
       <div class="overflow-x-auto">
         <table class="w-full text-[13px] min-w-[1060px] border-collapse">
@@ -440,7 +531,17 @@ function getDisplayBadgeInfo(row) {
             <tr v-else-if="!filteredTrcloudRows.length">
               <td colspan="10" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูล PR จาก TRCLOUD</td>
             </tr>
-            <tr v-for="r in filteredTrcloudRows" :key="r.pr_id || r.id" class="hover:bg-gray-50/50 transition-colors border-bottom" style="border-bottom: 1px solid var(--color-border)">
+            <!--
+              ✅ key ใช้ getRowIdentity เพื่อให้ Vue track DOM node ตาม identity จริง
+                 ไม่ใช่ index → Vue จะ reuse DOM node เดิม ไม่สร้างใหม่
+                 ทำให้ checkbox focus/state ไม่กระโดดไปที่ row อื่น
+            -->
+            <tr
+              v-for="r in filteredTrcloudRows"
+              :key="getRowIdentity(r)"
+              class="hover:bg-gray-50/50 transition-colors"
+              style="border-bottom: 1px solid var(--color-border)"
+            >
               <td class="px-4 py-3 font-medium font-mono" style="color: #00d4ff; border-right: 1px solid var(--color-border)">{{ r.document_number || r.pr_id || '-' }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.issue_date || '-' }}</td>
               <td class="px-4 py-3 font-medium" style="color: #3b82f6; border-right: 1px solid var(--color-border)">{{ calculateDocAge(r.issue_date || r.date) }}</td>
@@ -450,15 +551,25 @@ function getDisplayBadgeInfo(row) {
               <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.project || '-' }}</td>
               <td class="px-4 py-3 text-right font-mono" style="color: #f59e0b; border-right: 1px solid var(--color-border)">{{ Number(r.grand_total || 0).toLocaleString('th-TH', {minimumFractionDigits:2, maximumFractionDigits:2}) }}</td>
               <td class="px-4 py-3 text-center" style="border-right: 1px solid var(--color-border)">
+                <!--
+                  ✅ @mousedown.prevent — ป้องกัน browser เลื่อน focus อัตโนมัติ
+                     หลัง DOM re-order (Vue reuse node แล้ว แต่ mousedown ยิงก่อน click)
+                  ✅ :checked แทน v-model — ควบคุม checked state จาก trackedRowIds โดยตรง
+                     ไม่ให้ Vue binding ทำงานก่อน handler ของเรา
+                -->
                 <input
-                  :checked="isTracked(r)"
                   type="checkbox"
+                  :checked="isTracked(r)"
                   class="w-4 h-4 accent-red-600 cursor-pointer"
+                  @mousedown.prevent
                   @change="toggleTracked(r, $event.target.checked)"
                 />
               </td>
               <td class="px-4 py-3">
-                <span class="px-3 py-1 rounded-full text-[11px] font-semibold border" :style="{ backgroundColor: getDisplayBadgeInfo(r).bg, color: getDisplayBadgeInfo(r).color, borderColor: getDisplayBadgeInfo(r).border }">
+                <span
+                  class="px-3 py-1 rounded-full text-[11px] font-semibold border"
+                  :style="{ backgroundColor: getDisplayBadgeInfo(r).bg, color: getDisplayBadgeInfo(r).color, borderColor: getDisplayBadgeInfo(r).border }"
+                >
                   {{ getDisplayBadgeInfo(r).text }}
                 </span>
               </td>

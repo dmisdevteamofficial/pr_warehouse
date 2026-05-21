@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useTrcloudStore } from '@/stores/trcloud'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
@@ -16,22 +16,6 @@ const TRACK_STORAGE_KEY = 'trcloud_ap_tracked_rows'
 const TRACK_TABLE = 'trcloud_tracking'
 const TRACK_DOC_TYPE = 'ap'
 const trackedRowIds = ref(loadTrackedRowIds())
-
-function calculateAge(dateStr) {
-  if (!dateStr) return 0
-  try {
-    const issueDate = new Date(dateStr)
-    if (isNaN(issueDate.getTime())) return 0
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    issueDate.setHours(0, 0, 0, 0)
-    const diffTime = today - issueDate
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24))
-    return diffDays < 0 ? 0 : diffDays
-  } catch {
-    return 0
-  }
-}
 
 function loadTrackedRowIds() {
   try {
@@ -56,28 +40,10 @@ async function loadTrackedRowIdsFromCloud() {
       .eq('doc_type', TRACK_DOC_TYPE)
     if (error) throw error
     const cloudIds = (data || []).map((r) => String(r.doc_key || '')).filter(Boolean)
-    
-    // ใช้ข้อมูลจาก Cloud เป็นหลัก
-    trackedRowIds.value = cloudIds
-    
-    // ล้างข้อมูลที่ไม่มีอยู่ในตารางแล้ว (Cleanup)
-    cleanupTrackedIds()
-    
+    trackedRowIds.value = [...new Set([...trackedRowIds.value, ...cloudIds])]
     persistTrackedRowIds()
   } catch (err) {
     console.warn('AP item track cloud load failed:', err?.message || err)
-  }
-}
-
-// ฟังก์ชันสำหรับล้าง ID ที่ไม่มีอยู่ในข้อมูลปัจจุบันแล้ว
-function cleanupTrackedIds() {
-  if (!trcloudStore.apItemRows || trcloudStore.apItemRows.length === 0) return
-  
-  const currentIds = new Set(trcloudStore.apItemRows.map(r => getRowIdentity(r)))
-  const validTrackedIds = trackedRowIds.value.filter(id => currentIds.has(id))
-  
-  if (validTrackedIds.length !== trackedRowIds.value.length) {
-    trackedRowIds.value = validTrackedIds
   }
 }
 
@@ -112,8 +78,12 @@ async function setTrackedCloud(docKeys, checked) {
 }
 
 function getRowIdentity(row) {
-  // ใช้ unique_id จาก Store เพื่อความแม่นยำสูงสุด ป้องกันการติ๊กซ้ำซ้อน
-  return String(row.unique_id || '')
+  // สร้าง Identity ที่ไม่ซ้ำกันรายบรรทัดสินค้า โดยใช้ เลขที่เอกสาร + ชื่อสินค้า + จำนวน + ราคา
+  const doc = row.doc_number || row.invoice_number || row.ap_id || row.id || ''
+  const item = row.item_name || ''
+  const qty = row.quantity || ''
+  const price = row.price || ''
+  return String(`${doc}|${item}|${qty}|${price}`)
 }
 
 function isTracked(row) {
@@ -123,16 +93,22 @@ function isTracked(row) {
 
 function toggleTracked(row, checked) {
   const currentId = getRowIdentity(row)
-  if (!currentId) return
+  const docNo = row.doc_number || row.invoice_number || ''
   
   if (checked) {
-    // เพิ่มเข้าลำดับแรกสุด (Newest First)
-    trackedRowIds.value = [currentId, ...trackedRowIds.value.filter(id => id !== currentId)]
+    // กรณีติ๊กถูก: ให้เลือกทุกรายการที่มีเลขที่เอกสารเดียวกัน
+    const relatedRows = trcloudStore.apItemRows.filter(r => 
+      (r.doc_number || r.invoice_number) === docNo
+    )
+    
+    const newIds = relatedRows.map(getRowIdentity).filter(Boolean)
+    trackedRowIds.value = [...new Set([...trackedRowIds.value, ...newIds])]
     
     persistTrackedRowIds()
-    setTrackedCloud(currentId, true)
+    setTrackedCloud(newIds, true)
   } else {
     // กรณีติ๊กออก: ให้ยกเลิกเฉพาะรายการที่กดเท่านั้น
+    if (!currentId) return
     trackedRowIds.value = trackedRowIds.value.filter((x) => x !== currentId)
     
     persistTrackedRowIds()
@@ -152,40 +128,24 @@ const filteredRows = computed(() => {
     rows = rows.filter((row) => String(row.status || '').includes(statusFilter.value))
   }
   
-  // กรองตาม Tab: ติดตามงาน (แสดงข้อมูลทั้งหมดยกเว้นรายการที่สำเร็จแล้ว)
+  // กรองตาม Tab: ติดตามงาน (แสดงเฉพาะยังไม่ชำระ)
   if (activeTab.value === 'tracking') {
     rows = rows.filter((row) => {
       const s = String(row.status || '').toLowerCase()
-      // Success includes 'ชำระแล้ว', 'paid', 'เรียบร้อย', 'เสร็จสิ้น', 'สำเร็จ'
-      const isSuccess = s.includes('ชำระแล้ว') || s.includes('paid') || s.includes('เรียบร้อย') || s.includes('เสร็จสิ้น') || s.includes('สำเร็จ')
-      
-      // แสดงข้อมูลทั้งหมดยกเว้น Success โดยไม่สนการติ๊กถูก
-      return !isSuccess
+      return s.includes('ยังไม่') || s.includes('unpaid') || s.includes('pending') || s.includes('ค้าง')
     })
   }
 
   const q = searchQuery.value.toLowerCase().trim()
   if (q) {
     rows = rows.filter((row) =>
-      [row.doc_number, row.ref_po, row.organization, row.item_name, row.status]
+      [row.doc_number, row.organization, row.item_name, row.status]
         .join(' | ')
         .toLowerCase()
         .includes(q)
     )
   }
   return rows.sort((a, b) => {
-    // ในโหมดติดตามงาน: ให้รายการที่ติ๊กเลือกล่าสุดขึ้นบนสุด
-    if (activeTab.value === 'tracking') {
-      const idA = getRowIdentity(a)
-      const idB = getRowIdentity(b)
-      const trackedA = trackedRowIds.value.indexOf(idA)
-      const trackedB = trackedRowIds.value.indexOf(idB)
-
-      if (trackedA !== -1 && trackedB !== -1) return trackedA - trackedB
-      if (trackedA !== -1) return -1
-      if (trackedB !== -1) return 1
-    }
-
     const dateA = a.issue_date || ''
     const dateB = b.issue_date || ''
     if (dateA === dateB) return String(a.doc_number || '').localeCompare(String(b.doc_number || ''))
@@ -198,14 +158,8 @@ const invoiceCount = computed(() => (trcloudStore.apRows || []).length)
 const loading = computed(() => trcloudStore.loading)
 
 async function refreshApItemRows() {
-  await trcloudStore.fetchTrcloudData('ap', { force: true })
-  cleanupTrackedIds()
+  trcloudStore.fetchTrcloudData('ap', { force: true })
 }
-
-// ล้างข้อมูลทุกครั้งที่ข้อมูลใน Store เปลี่ยนแปลง
-watch(() => trcloudStore.apItemRows, () => {
-  cleanupTrackedIds()
-}, { deep: true })
 
 function sendToAppo(row) {
   const doc = row.doc_number || row.invoice_number || '-'
@@ -295,14 +249,12 @@ onMounted(() => {
 
     <div class="rounded-xl border overflow-hidden" style="background: var(--color-bg-card); border-color: var(--color-border)">
       <div class="overflow-x-auto">
-        <table class="w-full text-[13px] min-w-[1230px] border-collapse table-fixed">
+        <table class="w-full text-[13px] min-w-[1000px] border-collapse table-fixed">
           <thead>
             <tr class="text-left" style="background: var(--color-bg-body); border-bottom: 1px solid var(--color-border)">
               <th class="px-4 py-3 font-medium w-[50px] text-center" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">#</th>
               <th class="px-4 py-3 font-medium w-[130px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">เลขที่เอกสาร</th>
-              <th class="px-4 py-3 font-medium w-[130px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิง PO</th>
               <th class="px-4 py-3 font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่</th>
-              <th class="px-4 py-3 font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อายุ (วัน)</th>
               <th class="px-4 py-3 font-medium w-[200px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">คู่ค้า</th>
               <th class="px-4 py-3 font-medium min-w-[200px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">รายการสินค้า / คำอธิบาย</th>
               <th class="px-4 py-3 font-medium w-[80px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">จำนวน</th>
@@ -314,7 +266,7 @@ onMounted(() => {
           </thead>
           <tbody>
             <tr v-if="loading">
-              <td colspan="12" class="px-4 py-12 text-center">
+              <td colspan="10" class="px-4 py-12 text-center">
                 <div class="flex flex-col items-center gap-2">
                   <i class="fa-solid fa-circle-notch fa-spin text-2xl text-blue-500"></i>
                   <span style="color: var(--color-text-muted)">กำลังดึงข้อมูลจาก TRCLOUD...</span>
@@ -322,7 +274,7 @@ onMounted(() => {
               </td>
             </tr>
             <tr v-else-if="!filteredRows.length">
-              <td colspan="12" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบรายการ AP รายการสินค้า</td>
+              <td colspan="10" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบรายการ AP รายการสินค้า</td>
             </tr>
             <tr v-for="(row, index) in filteredRows" :key="`${row.doc_number || ''}_${row.item_name || ''}_${row.price || ''}_${index}`" class="hover:bg-gray-50/50 transition-colors" style="border-bottom: 1px solid var(--color-border)">
               <td class="px-4 py-3 text-center relative" style="border-right: 1px solid var(--color-border)">
@@ -350,11 +302,7 @@ onMounted(() => {
                 </div>
               </td>
               <td class="px-4 py-3 font-mono break-all" style="color: var(--color-text-primary)">{{ row.doc_number || '-' }}</td>
-              <td class="px-4 py-3 font-mono break-all" style="color: var(--color-text-primary)">{{ row.ref_po || '-' }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary)">{{ row.issue_date || '-' }}</td>
-              <td class="px-4 py-3 font-mono" :style="{ color: calculateAge(row.issue_date) > 30 ? '#ef4444' : calculateAge(row.issue_date) > 15 ? '#f59e0b' : 'var(--color-text-primary)' }">
-                {{ calculateAge(row.issue_date) }} วัน
-              </td>
               <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary)">{{ row.organization || '-' }}</td>
               <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary)">{{ row.item_name || '-' }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary)">{{ row.quantity || '-' }}</td>

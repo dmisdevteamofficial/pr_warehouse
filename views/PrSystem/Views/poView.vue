@@ -40,10 +40,6 @@ const TRACK_TABLE = 'trcloud_tracking'
 const TRACK_DOC_TYPE = 'po'
 const trackedRowIds = ref(loadTrackedRowIds())
 
-// frozenOrder: เก็บลำดับของ trackedRowIds ไว้ใช้สำหรับ sort ใน "ติดตามงาน"
-// จะถูก update เฉพาะตอน toggle เพิ่ม ไม่ใช่ตอน load
-const frozenOrder = ref(loadTrackedRowIds())
-
 function loadTrackedRowIds() {
   try {
     const raw = localStorage.getItem(TRACK_STORAGE_KEY)
@@ -67,30 +63,10 @@ async function loadTrackedRowIdsFromCloud() {
       .eq('doc_type', TRACK_DOC_TYPE)
     if (error) throw error
     const cloudIds = (data || []).map((r) => String(r.doc_key || '')).filter(Boolean)
-    
-    // ใช้ข้อมูลจาก Cloud เป็นหลัก
-    trackedRowIds.value = cloudIds
-    frozenOrder.value = [...cloudIds]
-    
-    // ล้างข้อมูลที่ไม่มีอยู่ในตารางแล้ว (Cleanup)
-    cleanupTrackedIds()
-    
+    trackedRowIds.value = [...new Set([...trackedRowIds.value, ...cloudIds])]
     persistTrackedRowIds()
   } catch (err) {
     console.warn('PO track cloud load failed, fallback to local:', err?.message || err)
-  }
-}
-
-// ฟังก์ชันสำหรับล้าง ID ที่ไม่มีอยู่ในข้อมูลปัจจุบันแล้ว
-function cleanupTrackedIds() {
-  if (trcloudStore.poRows.length === 0) return
-  
-  const currentIds = new Set(trcloudStore.poRows.map(r => getRowIdentity(r)))
-  const validTrackedIds = trackedRowIds.value.filter(id => currentIds.has(id))
-  
-  if (validTrackedIds.length !== trackedRowIds.value.length) {
-    trackedRowIds.value = validTrackedIds
-    frozenOrder.value = frozenOrder.value.filter(id => currentIds.has(id))
   }
 }
 
@@ -98,6 +74,7 @@ async function setTrackedCloud(docKeys, checked) {
   try {
     const keys = Array.isArray(docKeys) ? docKeys : [docKeys]
     if (checked) {
+      // Keep one active row per (doc_type, doc_key) without relying on unique index.
       await supabase.from(TRACK_TABLE).delete().eq('doc_type', TRACK_DOC_TYPE).in('doc_key', keys)
       const inserts = keys.map(k => ({
         doc_type: TRACK_DOC_TYPE,
@@ -141,16 +118,11 @@ const trcloudKpi = computed(() => {
 
 async function fetchTrcloudData() {
   await trcloudStore.fetchTrcloudData('po')
-  cleanupTrackedIds()
 }
-
-// ล้างข้อมูลทุกครั้งที่ข้อมูลใน Store เปลี่ยนแปลง
-watch(() => trcloudStore.poRows, () => {
-  cleanupTrackedIds()
-}, { deep: true })
 
 onMounted(() => {
   loadTrackedRowIdsFromCloud()
+  // Only fetch if data is empty to avoid redundant calls
   if (trcloudStore.poRows.length === 0) {
     fetchTrcloudData()
   }
@@ -168,7 +140,6 @@ watch(
     if (nextTracked.length !== trackedRowIds.value.length) {
       const removedIds = trackedRowIds.value.filter((id) => !nextTracked.includes(id))
       trackedRowIds.value = nextTracked
-      frozenOrder.value = frozenOrder.value.filter(id => nextTracked.includes(id))
       persistTrackedRowIds()
       setTrackedCloud(removedIds, false)
     }
@@ -176,56 +147,10 @@ watch(
   { immediate: true, deep: true }
 )
 
-// --- Helper: หา row identity (unique_id) ---
-function getRowIdentity(row) {
-  return String(row.unique_id || row.document_number || row.po_id || row.id || '')
-}
-
-// --- Helper: หาเลขที่เอกสารเพื่อหา Siblings ---
-function getDocNumber(row) {
-  return String(row.document_number || row.po_id || '')
-}
-
-// ตรวจสอบว่าแถวนี้ถูกติดตามอยู่หรือไม่
-function isTracked(row) {
-  const id = getRowIdentity(row)
-  return id ? trackedRowIds.value.includes(id) : false
-}
-
-// --- Toggle: เลือก/ยกเลิก ---
-async function toggleTracked(row, checked) {
-  const currentId = getRowIdentity(row)
-  const docNum = getDocNumber(row)
-  if (!currentId) return
-
-  if (checked) {
-    // 1. ติ๊กถูก: ให้เลือกทุกรายการที่มีเลขที่เอกสารเดียวกัน (Siblings)
-    const siblings = trcloudStore.poRows.filter(r => getDocNumber(r) === docNum)
-    const siblingIds = siblings.map(r => getRowIdentity(r)).filter(Boolean)
-    
-    // เพิ่ม IDs ใหม่เข้าไป (ไม่ซ้ำ)
-    trackedRowIds.value = [...new Set([...siblingIds, ...trackedRowIds.value])]
-    
-    // หมายเหตุ: ไม่ทำการอัปเดต frozenOrder ที่นี่ เพื่อให้ตำแหน่งแถวคงที่ (Frozen) ขณะใช้งาน
-    // จะจัดลำดับใหม่ก็ต่อเมื่อโหลดหน้าใหม่หรือเปลี่ยนหน้าเท่านั้น
-    
-    persistTrackedRowIds()
-    await setTrackedCloud(siblingIds, true)
-  } else {
-    // 2. ติ๊กออก: ให้ยกเลิกเฉพาะรายการที่กดเท่านั้น
-    trackedRowIds.value = trackedRowIds.value.filter(id => id !== currentId)
-    
-    // หมายเหตุ: ไม่ทำการอัปเดต frozenOrder ที่นี่ เพื่อให้ตำแหน่งแถวคงที่
-    
-    persistTrackedRowIds()
-    await setTrackedCloud(currentId, false)
-  }
-}
-
 const filteredTrcloudRows = computed(() => {
   let rows = trcloudStore.poRows
 
-  // Filter by Date
+  // Filter by Date (Client-side)
   if (trcloudDateFrom.value || trcloudDateTo.value) {
     rows = rows.filter(r => {
       const docDate = r.issue_date || r.date || r.issueDate
@@ -236,12 +161,11 @@ const filteredTrcloudRows = computed(() => {
     })
   }
 
-  // Filter by View Mode
+  // Filter by View Mode (Tracking excludes Success)
   if (viewMode.value === 'tracking') {
     rows = rows.filter(r => {
       const s = (r.status || '').toLowerCase()
-      const isSuccess = s.includes('success') || s.includes('เสร็จสิ้น') || s.includes('เรียบร้อย') || s.includes('สำเร็จ')
-      return !isSuccess
+      return !s.includes('success') && !s.includes('เสร็จสิ้น') && !s.includes('เรียบร้อย')
     })
   }
 
@@ -263,26 +187,30 @@ const filteredTrcloudRows = computed(() => {
   // Search filter
   const q = trcloudFilter.value.toLowerCase().trim()
   if (q) {
-    rows = rows.filter(r =>
+    rows = rows.filter(r => 
       JSON.stringify(r).toLowerCase().includes(q)
     )
   }
 
-  // Sort
+  // Sort by Tracking status first, then by Date Descending
   return [...rows].sort((a, b) => {
+    // If in tracking mode, show tracked items at the top
     if (viewMode.value === 'tracking') {
-      // ใช้ frozenOrder เพื่อให้ลำดับไม่กระโดดระหว่าง session
       const idA = getRowIdentity(a)
       const idB = getRowIdentity(b)
-      const orderA = frozenOrder.value.indexOf(idA)
-      const orderB = frozenOrder.value.indexOf(idB)
+      const trackedA = trackedRowIds.value.indexOf(idA)
+      const trackedB = trackedRowIds.value.indexOf(idB)
 
-      // ถ้าทั้งคู่อยู่ใน frozenOrder: เรียงตาม frozenOrder (index น้อย = ล่าสุด = ขึ้นบน)
-      if (orderA !== -1 && orderB !== -1) return orderA - orderB
-      // A อยู่ใน frozenOrder, B ไม่อยู่: A ขึ้นบน
-      if (orderA !== -1) return -1
-      // B อยู่ใน frozenOrder, A ไม่อยู่: B ขึ้นบน
-      if (orderB !== -1) return 1
+      // Both are tracked: sort by their order in trackedRowIds (most recent first)
+      if (trackedA !== -1 && trackedB !== -1) {
+        return trackedA - trackedB
+      }
+      
+      // Only A is tracked: A comes first
+      if (trackedA !== -1) return -1
+      
+      // Only B is tracked: B comes first
+      if (trackedB !== -1) return 1
     }
 
     // Default: sort by Date Descending
@@ -330,9 +258,38 @@ function getDocMonth(row) {
   return monthPart && monthPart.length === 2 ? monthPart : ''
 }
 
+function getRowIdentity(row) {
+  return String(row.document_number || row.po_id || row.id || '')
+}
+
 function isSuccessStatus(status) {
   const s = (status || '').toString().toLowerCase()
   return s.includes('success') || s.includes('เสร็จสิ้น') || s.includes('เรียบร้อย')
+}
+
+function isTracked(row) {
+  const id = getRowIdentity(row)
+  return id ? trackedRowIds.value.includes(id) : false
+}
+
+function toggleTracked(row, checked) {
+  const currentId = getRowIdentity(row)
+  if (!currentId) return
+
+  if (checked) {
+    // Select all rows with the same document number
+    const relatedRows = trcloudStore.poRows.filter(r => getRowIdentity(r) === currentId)
+    const newIds = relatedRows.map(getRowIdentity).filter(Boolean)
+    
+    trackedRowIds.value = [...new Set([currentId, ...trackedRowIds.value, ...newIds])]
+    persistTrackedRowIds()
+    setTrackedCloud(newIds, true)
+  } else {
+    // Deselect ONLY this specific row
+    trackedRowIds.value = trackedRowIds.value.filter((x) => x !== currentId)
+    persistTrackedRowIds()
+    setTrackedCloud(currentId, false)
+  }
 }
 
 function getDisplayBadgeInfo(row) {
@@ -408,6 +365,7 @@ function getDisplayBadgeInfo(row) {
           <input v-model="trcloudDateTo" type="date" class="px-3 py-1.5 bg-transparent border rounded-lg text-[13px] focus:outline-none" style="border-color: var(--color-border); color: var(--color-text-primary)" />
         </div>
 
+        <!-- Project Filter -->
         <div class="flex items-center gap-2">
           <label class="text-[12px] font-medium" style="color: var(--color-text-muted)">โครงการ</label>
           <select v-model="projectFilter" class="px-3 py-1.5 bg-transparent border rounded-lg text-[13px] focus:outline-none min-w-[150px]" style="border-color: var(--color-border); color: var(--color-text-primary)">
@@ -416,6 +374,7 @@ function getDisplayBadgeInfo(row) {
           </select>
         </div>
 
+        <!-- Status Filter -->
         <div class="flex items-center gap-2">
           <label class="text-[12px] font-medium" style="color: var(--color-text-muted)">สถานะ</label>
           <select v-model="statusFilter" class="px-3 py-1.5 bg-transparent border rounded-lg text-[13px] focus:outline-none min-w-[120px]" style="border-color: var(--color-border); color: var(--color-text-primary)">
@@ -474,12 +433,7 @@ function getDisplayBadgeInfo(row) {
             <tr v-else-if="!filteredTrcloudRows.length">
               <td colspan="11" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูล PO จาก TRCLOUD</td>
             </tr>
-            <tr
-              v-for="r in filteredTrcloudRows"
-              :key="r.unique_id || r.po_id || r.id"
-              class="hover:bg-gray-50/50 transition-colors"
-              style="border-bottom: 1px solid var(--color-border)"
-            >
+            <tr v-for="r in filteredTrcloudRows" :key="r.po_id || r.id" class="hover:bg-gray-50/50 transition-colors border-bottom" style="border-bottom: 1px solid var(--color-border)">
               <td class="px-4 py-3 font-medium font-mono" style="color: #7c3aed; border-right: 1px solid var(--color-border)">{{ r.document_number || r.po_id || '-' }}</td>
               <td class="px-4 py-3 font-mono" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.expense || r.expense_no || r.expense_number || r.expense_doc || r.expense_id || '-' }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.issue_date || '-' }}</td>

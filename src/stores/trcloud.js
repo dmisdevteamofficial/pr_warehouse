@@ -65,6 +65,7 @@ export const useTrcloudStore = defineStore('trcloud', () => {
     const status = invoice?.payment_status || invoice?.status || invoice?.status_payment || invoice?.status_text || invoice?.invoice_status || ''
 
     return {
+      unique_id: item?.item_id || item?.ap_item_id || item?.po_item_id || `${docNumber}_${itemName}_${item?.quantity}_${item?.price}_${Math.random().toString(36).substr(2, 9)}`,
       doc_number: docNumber,
       invoice_number: invoiceNumber,
       issue_date: invoice?.issue_date || invoice?.date || invoice?.issueDate || '',
@@ -81,7 +82,8 @@ export const useTrcloudStore = defineStore('trcloud', () => {
       staff: invoice?.staff || invoice?.created_by || '',
       department: invoice?.department || invoice?.department_name || '',
       currency: invoice?.currency || invoice?.currency_name || 'THB',
-      ref_po: invoice?.po || invoice?.reference || invoice?.po_number || ''
+      ref_po: invoice?.po || invoice?.reference || invoice?.po_number || '',
+      expense: invoice?.expense || invoice?.expense_no || invoice?.expense_number || invoice?.expense_doc || invoice?.expense_id || ''
     }
   }
 
@@ -102,6 +104,7 @@ export const useTrcloudStore = defineStore('trcloud', () => {
         const companyFormat = invoice?.company_format || ''
         const docNumber = companyFormat ? `${companyFormat}${invoiceNumber}` : String(invoiceNumber || '')
         rows.push({
+          unique_id: invoice?.item_id || invoice?.ap_item_id || `${docNumber}_${invoice?.issue_date}_${invoice?.total || invoice?.grand_total}`,
           doc_number: docNumber,
           invoice_number: invoiceNumber,
           issue_date: invoice?.issue_date || invoice?.date || invoice?.issueDate || '',
@@ -118,7 +121,8 @@ export const useTrcloudStore = defineStore('trcloud', () => {
           staff: invoice?.staff || invoice?.created_by || '',
           department: invoice?.department || invoice?.department_name || '',
           currency: invoice?.currency || invoice?.currency_name || 'THB',
-          ref_po: invoice?.po || invoice?.reference || invoice?.po_number || ''
+          ref_po: invoice?.po || invoice?.reference || invoice?.po_number || '',
+          expense: invoice?.expense || invoice?.expense_no || invoice?.expense_number || invoice?.expense_doc || invoice?.expense_id || ''
         })
       }
     }
@@ -143,6 +147,7 @@ export const useTrcloudStore = defineStore('trcloud', () => {
         const companyFormat = po?.company_format || ''
         const docNumber = companyFormat ? `${companyFormat}${poNumber}` : String(poNumber || '')
         rows.push({
+          unique_id: po?.item_id || po?.po_item_id || `${docNumber}_${po?.issue_date}_${po?.total || po?.grand_total}`,
           doc_number: docNumber,
           invoice_number: poNumber,
           issue_date: po?.issue_date || po?.date || po?.issueDate || '',
@@ -159,7 +164,8 @@ export const useTrcloudStore = defineStore('trcloud', () => {
           staff: po?.staff || po?.created_by || '',
           department: po?.department || po?.department_name || '',
           currency: po?.currency || po?.currency_name || 'THB',
-          ref_po: po?.po || po?.reference || po?.po_number || ''
+          ref_po: po?.po || po?.reference || po?.po_number || '',
+          expense: po?.expense || po?.expense_no || po?.expense_number || po?.expense_doc || po?.expense_id || ''
         })
       }
     }
@@ -183,6 +189,7 @@ export const useTrcloudStore = defineStore('trcloud', () => {
         const companyFormat = pr?.company_format || ''
         const docNumber = companyFormat ? `${companyFormat}${prNumber}` : String(prNumber || '')
         rows.push({
+          unique_id: pr?.item_id || pr?.pr_id || `${docNumber}_${pr?.issue_date}_${pr?.total || pr?.grand_total}`,
           doc_number: docNumber,
           invoice_number: prNumber,
           issue_date: pr?.issue_date || pr?.date || pr?.issueDate || '',
@@ -199,7 +206,8 @@ export const useTrcloudStore = defineStore('trcloud', () => {
           staff: pr?.staff || pr?.created_by || '',
           department: pr?.department || pr?.department_name || '',
           currency: pr?.currency || pr?.currency_name || 'THB',
-          ref_po: pr?.po || pr?.reference || pr?.po_number || ''
+          ref_po: pr?.po || pr?.reference || pr?.po_number || '',
+          expense: pr?.expense || pr?.expense_no || pr?.expense_number || pr?.expense_doc || pr?.expense_id || ''
         })
       }
     }
@@ -502,10 +510,13 @@ export const useTrcloudStore = defineStore('trcloud', () => {
             if (pid) {
               if (!seen.has(pid)) {
                 seen.add(pid)
+                it.unique_id = String(pid) // เก็บ unique_id ไว้ในตัวข้อมูลเลย
                 newItems.push(it)
               }
             } else {
               // If no identifier available, include the row to avoid losing data
+              const fallbackId = `fallback_${type}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+              it.unique_id = fallbackId
               newItems.push(it)
             }
           }

@@ -55,30 +55,11 @@ async function loadTrackedRowIdsFromCloud() {
       .eq('doc_type', TRACK_DOC_TYPE)
     if (error) throw error
     const cloudIds = (data || []).map((r) => String(r.doc_key || '')).filter(Boolean)
-    
-    // ใช้ข้อมูลจาก Cloud เป็นหลัก
-    trackedRowIds.value = cloudIds
-    sortingTrackedIds.value = [...cloudIds]
-    
-    // ล้างข้อมูลที่ไม่มีอยู่ในตารางแล้ว (Cleanup)
-    cleanupTrackedIds()
-    
+    trackedRowIds.value = [...new Set([...trackedRowIds.value, ...cloudIds])]
+    sortingTrackedIds.value = [...trackedRowIds.value]
     persistTrackedRowIds()
   } catch (err) {
     console.warn('PO item track cloud load failed:', err?.message || err)
-  }
-}
-
-// ฟังก์ชันสำหรับล้าง ID ที่ไม่มีอยู่ในข้อมูลปัจจุบันแล้ว
-function cleanupTrackedIds() {
-  if (!trcloudStore.poItemRows || trcloudStore.poItemRows.length === 0) return
-  
-  const currentIds = new Set(trcloudStore.poItemRows.map(r => getRowIdentity(r)))
-  const validTrackedIds = trackedRowIds.value.filter(id => currentIds.has(id))
-  
-  if (validTrackedIds.length !== trackedRowIds.value.length) {
-    trackedRowIds.value = validTrackedIds
-    sortingTrackedIds.value = sortingTrackedIds.value.filter(id => currentIds.has(id))
   }
 }
 
@@ -109,8 +90,9 @@ async function setTrackedCloud(docKeys, checked) {
 }
 
 function getRowIdentity(row) {
-  // ใช้ unique_id จาก Store เพื่อความแม่นยำสูงสุด ป้องกันการติ๊กซ้ำซ้อน
-  return String(row.unique_id || '')
+  if (!row) return ''
+  // Use a combination of fields to make it unique per item row
+  return `${row.doc_number || ''}|${row.item_name || ''}|${row.quantity || ''}|${row.price || ''}`
 }
 
 function isTracked(row) {
@@ -120,27 +102,20 @@ function isTracked(row) {
 
 async function toggleTracked(row, checked) {
   const currentId = getRowIdentity(row)
-  const docNum = row.doc_number || row.invoice_number || ''
-  if (!currentId) return
+  const docNumber = row.doc_number || ''
   
   if (checked) {
-    // 1. ติ๊กถูก: เลือกทุกรายการที่มีเลขที่เอกสารเดียวกัน (Siblings)
-    const siblings = trcloudStore.poItemRows.filter(r => (r.doc_number || r.invoice_number) === docNum)
-    const siblingIds = siblings.map(r => getRowIdentity(r)).filter(Boolean)
+    // Select ALL items with the same doc_number
+    const itemsInSamePo = trcloudStore.poItemRows.filter((r) => (r.doc_number || r.invoice_number) === docNumber)
+    const newIds = itemsInSamePo.map(getRowIdentity).filter(Boolean)
     
-    // เพิ่มเข้าลำดับแรกสุด (Newest First) สำหรับการจัดลำดับครั้งถัดไป
-    trackedRowIds.value = [...new Set([...siblingIds, ...trackedRowIds.value])]
-    
-    // หมายเหตุ: ไม่ทำการอัปเดต sortingTrackedIds ที่นี่ เพื่อให้ตำแหน่งแถวคงที่ (Frozen) ขณะใช้งาน
-    
+    trackedRowIds.value = [...new Set([...newIds, ...trackedRowIds.value])]
     persistTrackedRowIds()
-    await setTrackedCloud(siblingIds, true)
+    await setTrackedCloud(newIds, true)
   } else {
-    // 2. ติ๊กออก: ให้ยกเลิกเฉพาะรายการที่กดเท่านั้น
+    // Unselect ONLY this specific item
+    if (!currentId) return
     trackedRowIds.value = trackedRowIds.value.filter((x) => x !== currentId)
-    
-    // หมายเหตุ: ไม่ทำการอัปเดต sortingTrackedIds ที่นี่
-    
     persistTrackedRowIds()
     await setTrackedCloud(currentId, false)
   }
@@ -160,12 +135,11 @@ const filteredRows = computed(() => {
   if (viewMode.value === 'tracked') {
     rows = rows.filter((row) => {
       const status = String(row.status || '').toLowerCase()
-      // Success includes 'success', 'สำเร็จ', 'เสร็จสิ้น', 'เรียบร้อย'
-      const isSuccess = status.includes('success') || status.includes('สำเร็จ') || status.includes('เสร็จสิ้น') || status.includes('เรียบร้อย')
+      const isNew = status === 'new'
+      const isSuccess = status === 'success' || status === 'สำเร็จ' || status.includes('สำเร็จ')
       
-      // ในโหมดติดตามงาน: แสดงข้อมูลทั้งหมด (เช่น New, Partial) ยกเว้นรายการที่สำเร็จแล้ว (Success)
-      // โดยไม่ต้องสนใจว่ามีการติ๊กถูก (Tracked) หรือไม่
-      return !isSuccess
+      // ในโหมดติดตามงาน: ไม่แสดง Success และแสดงเฉพาะ New หรือรายการที่เลือกติดตามไว้
+      return !isSuccess && (isNew || isTracked(row))
     })
   }
 
@@ -220,14 +194,8 @@ const loading = computed(() => trcloudStore.loading)
 
 async function refreshPoItemRows() {
   await trcloudStore.fetchTrcloudData('po', { force: true })
-  cleanupTrackedIds()
   sortingTrackedIds.value = [...trackedRowIds.value]
 }
-
-// ล้างข้อมูลทุกครั้งที่ข้อมูลใน Store เปลี่ยนแปลง
-watch(() => trcloudStore.poItemRows, () => {
-  cleanupTrackedIds()
-}, { deep: true })
 
 // Update sorting order when switching view mode
 watch(viewMode, () => {
@@ -309,21 +277,21 @@ onMounted(() => {
 
     <div class="rounded-xl border overflow-hidden" style="background: var(--color-bg-card); border-color: var(--color-border)">
       <div class="overflow-x-auto">
-        <table class="w-full text-[13px] min-w-[1200px] border-collapse table-fixed">
+        <table class="w-full text-[13px] min-w-[1100px] border-collapse">
           <thead>
             <tr class="text-left" style="background: var(--color-bg-body); border-bottom: 1px solid var(--color-border)">
-              <th class="px-4 py-3 font-medium w-[130px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">เลขที่เอกสาร</th>
-              <th class="px-4 py-3 font-medium w-[130px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิงEXP</th>
-              <th class="px-4 py-3 font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่</th>
-              <th class="px-4 py-3 font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อายุ (วัน)</th>
-              <th class="px-4 py-3 font-medium w-[200px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">คู่ค้า</th>
-              <th class="px-4 py-3 font-medium min-w-[200px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">รายการสินค้า / คำอธิบาย</th>
-              <th class="px-4 py-3 font-medium w-[80px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">จำนวน</th>
-              <th class="px-4 py-3 font-medium w-[80px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">หน่วย</th>
-              <th class="px-4 py-3 font-medium w-[110px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ราคา/หน่วย</th>
-              <th class="px-4 py-3 font-medium w-[110px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ยอดรวม</th>
-              <th class="px-4 py-3 font-medium text-center w-[70px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ติดตาม</th>
-              <th class="px-4 py-3 font-medium w-[120px]" style="color: var(--color-text-muted)">สถานะ</th>
+              <th class="px-4 py-3 font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">เลขที่เอกสาร</th>
+              <th class="px-4 py-3 font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิงEXP</th>
+              <th class="px-4 py-3 font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่</th>
+              <th class="px-4 py-3 font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อายุ (วัน)</th>
+              <th class="px-4 py-3 font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">คู่ค้า</th>
+              <th class="px-4 py-3 font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">รายการสินค้า / คำอธิบาย</th>
+              <th class="px-4 py-3 font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">จำนวน</th>
+              <th class="px-4 py-3 font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">หน่วย</th>
+              <th class="px-4 py-3 font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ราคา/หน่วย</th>
+              <th class="px-4 py-3 font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ยอดรวม</th>
+              <th class="px-4 py-3 font-medium text-center" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ติดตาม</th>
+              <th class="px-4 py-3 font-medium" style="color: var(--color-text-muted)">สถานะ</th>
             </tr>
           </thead>
           <tbody>
@@ -339,14 +307,14 @@ onMounted(() => {
               <td colspan="12" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบรายการ PO รายการสินค้า</td>
             </tr>
             <tr v-for="row in filteredRows" :key="`${row.doc_number || ''}_${row.item_name || ''}_${row.price || ''}`" class="hover:bg-gray-50/50 transition-colors" style="border-bottom: 1px solid var(--color-border)">
-              <td class="px-4 py-3 font-mono break-all" style="color: var(--color-text-primary)">{{ row.doc_number || '-' }}</td>
-              <td class="px-4 py-3 font-mono break-all" style="color: var(--color-text-primary)">{{ row.expense || '-' }}</td>
+              <td class="px-4 py-3 font-mono" style="color: var(--color-text-primary)">{{ row.doc_number || '-' }}</td>
+              <td class="px-4 py-3 font-mono" style="color: var(--color-text-primary)">{{ row.expense || '-' }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary)">{{ row.issue_date || '-' }}</td>
               <td class="px-4 py-3 font-mono" :style="{ color: calculateAge(row.issue_date) > 30 ? '#ef4444' : calculateAge(row.issue_date) > 15 ? '#f59e0b' : 'var(--color-text-primary)' }">
                 {{ calculateAge(row.issue_date) }} วัน
               </td>
-              <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary)">{{ row.organization || '-' }}</td>
-              <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary)">{{ row.item_name || '-' }}</td>
+              <td class="px-4 py-3" style="color: var(--color-text-primary)">{{ row.organization || '-' }}</td>
+              <td class="px-4 py-3" style="color: var(--color-text-primary)">{{ row.item_name || '-' }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary)">{{ row.quantity || '-' }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary)">{{ row.unit || '-' }}</td>
               <td class="px-4 py-3 font-mono" style="color: var(--color-text-primary)">{{ Number(row.price || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</td>
@@ -360,7 +328,7 @@ onMounted(() => {
                 />
               </td>
               <td class="px-4 py-3">
-                <span class="px-3 py-1 rounded-full text-[11px] font-semibold border inline-block text-center w-full" :style="{
+                <span class="px-3 py-1 rounded-full text-[11px] font-semibold border" :style="{
                   backgroundColor: row.status?.toString().toLowerCase().includes('ยังไม่') || row.status?.toString().toLowerCase().includes('unpaid') ? 'rgba(239,68,68,0.12)' : 'rgba(16,185,129,0.12)',
                   color: row.status?.toString().toLowerCase().includes('ยังไม่') || row.status?.toString().toLowerCase().includes('unpaid') ? '#b91c1c' : '#047857',
                   borderColor: row.status?.toString().toLowerCase().includes('ยังไม่') || row.status?.toString().toLowerCase().includes('unpaid') ? 'rgba(239,68,68,0.25)' : 'rgba(16,185,129,0.25)'

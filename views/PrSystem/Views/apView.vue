@@ -6,7 +6,7 @@ import { useAuthStore } from '@/stores/auth'
 
 const trcloudStore = useTrcloudStore()
 const auth = useAuthStore()
-const trcloudPoRows = computed(() => trcloudStore.poRows)
+const trcloudApRows = computed(() => trcloudStore.apRows)
 const trcloudLoading = computed(() => trcloudStore.loading)
 const trcloudDateFrom = computed({
   get: () => trcloudStore.dateFrom,
@@ -35,14 +35,10 @@ const monthOptions = [
   { value: '11', label: 'พฤศจิกายน' },
   { value: '12', label: 'ธันวาคม' }
 ]
-const TRACK_STORAGE_KEY = 'trcloud_po_tracked_rows'
+const TRACK_STORAGE_KEY = 'trcloud_ap_tracked_rows'
 const TRACK_TABLE = 'trcloud_tracking'
-const TRACK_DOC_TYPE = 'po'
+const TRACK_DOC_TYPE = 'ap'
 const trackedRowIds = ref(loadTrackedRowIds())
-
-// frozenOrder: เก็บลำดับของ trackedRowIds ไว้ใช้สำหรับ sort ใน "ติดตามงาน"
-// จะถูก update เฉพาะตอน toggle เพิ่ม ไม่ใช่ตอน load
-const frozenOrder = ref(loadTrackedRowIds())
 
 function loadTrackedRowIds() {
   try {
@@ -67,30 +63,10 @@ async function loadTrackedRowIdsFromCloud() {
       .eq('doc_type', TRACK_DOC_TYPE)
     if (error) throw error
     const cloudIds = (data || []).map((r) => String(r.doc_key || '')).filter(Boolean)
-    
-    // ใช้ข้อมูลจาก Cloud เป็นหลัก
-    trackedRowIds.value = cloudIds
-    frozenOrder.value = [...cloudIds]
-    
-    // ล้างข้อมูลที่ไม่มีอยู่ในตารางแล้ว (Cleanup)
-    cleanupTrackedIds()
-    
+    trackedRowIds.value = [...new Set([...trackedRowIds.value, ...cloudIds])]
     persistTrackedRowIds()
   } catch (err) {
-    console.warn('PO track cloud load failed, fallback to local:', err?.message || err)
-  }
-}
-
-// ฟังก์ชันสำหรับล้าง ID ที่ไม่มีอยู่ในข้อมูลปัจจุบันแล้ว
-function cleanupTrackedIds() {
-  if (trcloudStore.poRows.length === 0) return
-  
-  const currentIds = new Set(trcloudStore.poRows.map(r => getRowIdentity(r)))
-  const validTrackedIds = trackedRowIds.value.filter(id => currentIds.has(id))
-  
-  if (validTrackedIds.length !== trackedRowIds.value.length) {
-    trackedRowIds.value = validTrackedIds
-    frozenOrder.value = frozenOrder.value.filter(id => currentIds.has(id))
+    console.warn('AP track cloud load failed, fallback to local:', err?.message || err)
   }
 }
 
@@ -116,116 +92,66 @@ async function setTrackedCloud(docKeys, checked) {
       .in('doc_key', keys)
     if (error) throw error
   } catch (err) {
-    console.warn('PO track cloud sync failed, keep local only:', err?.message || err)
+    console.warn('AP track cloud sync failed, keep local only:', err?.message || err)
   }
 }
 
 const availableProjects = computed(() => {
-  const projects = trcloudStore.poRows.map(r => r.project).filter(Boolean)
+  const projects = trcloudStore.apRows.map(r => r.project).filter(Boolean)
   return [...new Set(projects)].sort()
 })
 
 const availableStatuses = computed(() => {
-  const statuses = trcloudStore.poRows.map(r => r.status).filter(Boolean)
+  // For AP, we use payment_status as the main status
+  const statuses = trcloudStore.apRows.map(r => r.payment_status).filter(Boolean)
   return [...new Set(statuses)].sort()
 })
 
 const trcloudKpi = computed(() => {
   const sum = (arr, key) => arr.reduce((s, x) => s + parseFloat(x[key] || 0), 0)
-  const poAmt = sum(filteredTrcloudRows.value, 'grand_total')
+  const unpaidAp = trcloudStore.apRows.filter(x => (x.payment_status || '').includes('ยังไม่'))
   return {
-    poCount: filteredTrcloudRows.value.length,
-    poAmt
+    apCount: trcloudStore.apRows.length,
+    apUnpaidCount: unpaidAp.length,
+    apUnpaidAmt: sum(unpaidAp, 'grand_total')
   }
 })
 
 async function fetchTrcloudData() {
-  await trcloudStore.fetchTrcloudData('po')
-  cleanupTrackedIds()
+  await trcloudStore.fetchTrcloudData('ap')
 }
-
-// ล้างข้อมูลทุกครั้งที่ข้อมูลใน Store เปลี่ยนแปลง
-watch(() => trcloudStore.poRows, () => {
-  cleanupTrackedIds()
-}, { deep: true })
 
 onMounted(() => {
   loadTrackedRowIdsFromCloud()
-  if (trcloudStore.poRows.length === 0) {
+  // Only fetch if data is empty to avoid redundant calls
+  if (trcloudStore.apRows.length === 0) {
     fetchTrcloudData()
   }
 })
 
 watch(
-  () => trcloudStore.poRows,
+  () => trcloudStore.apRows,
   (rows) => {
     const activeRowsById = new Map(rows.map((r) => [getRowIdentity(r), r]))
     const nextTracked = trackedRowIds.value.filter((id) => {
       const row = activeRowsById.get(id)
       if (!row) return true
-      return !isSuccessStatus(row.status)
+      return !isPaidStatus(row.payment_status)
     })
     if (nextTracked.length !== trackedRowIds.value.length) {
       const removedIds = trackedRowIds.value.filter((id) => !nextTracked.includes(id))
       trackedRowIds.value = nextTracked
-      frozenOrder.value = frozenOrder.value.filter(id => nextTracked.includes(id))
       persistTrackedRowIds()
-      setTrackedCloud(removedIds, false)
+      removedIds.forEach((id) => setTrackedCloud(id, false))
     }
   },
   { immediate: true, deep: true }
 )
 
-// --- Helper: หา row identity (unique_id) ---
-function getRowIdentity(row) {
-  return String(row.unique_id || row.document_number || row.po_id || row.id || '')
-}
-
-// --- Helper: หาเลขที่เอกสารเพื่อหา Siblings ---
-function getDocNumber(row) {
-  return String(row.document_number || row.po_id || '')
-}
-
-// ตรวจสอบว่าแถวนี้ถูกติดตามอยู่หรือไม่
-function isTracked(row) {
-  const id = getRowIdentity(row)
-  return id ? trackedRowIds.value.includes(id) : false
-}
-
-// --- Toggle: เลือก/ยกเลิก ---
-async function toggleTracked(row, checked) {
-  const currentId = getRowIdentity(row)
-  const docNum = getDocNumber(row)
-  if (!currentId) return
-
-  if (checked) {
-    // 1. ติ๊กถูก: ให้เลือกทุกรายการที่มีเลขที่เอกสารเดียวกัน (Siblings)
-    const siblings = trcloudStore.poRows.filter(r => getDocNumber(r) === docNum)
-    const siblingIds = siblings.map(r => getRowIdentity(r)).filter(Boolean)
-    
-    // เพิ่ม IDs ใหม่เข้าไป (ไม่ซ้ำ)
-    trackedRowIds.value = [...new Set([...siblingIds, ...trackedRowIds.value])]
-    
-    // หมายเหตุ: ไม่ทำการอัปเดต frozenOrder ที่นี่ เพื่อให้ตำแหน่งแถวคงที่ (Frozen) ขณะใช้งาน
-    // จะจัดลำดับใหม่ก็ต่อเมื่อโหลดหน้าใหม่หรือเปลี่ยนหน้าเท่านั้น
-    
-    persistTrackedRowIds()
-    await setTrackedCloud(siblingIds, true)
-  } else {
-    // 2. ติ๊กออก: ให้ยกเลิกเฉพาะรายการที่กดเท่านั้น
-    trackedRowIds.value = trackedRowIds.value.filter(id => id !== currentId)
-    
-    // หมายเหตุ: ไม่ทำการอัปเดต frozenOrder ที่นี่ เพื่อให้ตำแหน่งแถวคงที่
-    
-    persistTrackedRowIds()
-    await setTrackedCloud(currentId, false)
-  }
-}
-
 const filteredTrcloudRows = computed(() => {
-  let rows = trcloudStore.poRows
+  let rows = trcloudStore.apRows
 
-  // Filter by Date
+  // Filter by Date (Client-side)
   if (trcloudDateFrom.value || trcloudDateTo.value) {
     rows = rows.filter(r => {
       const docDate = r.issue_date || r.date || r.issueDate
@@ -236,12 +162,11 @@ const filteredTrcloudRows = computed(() => {
     })
   }
 
-  // Filter by View Mode
+  // Filter by View Mode (Tracking only shows Unpaid)
   if (viewMode.value === 'tracking') {
     rows = rows.filter(r => {
-      const s = (r.status || '').toLowerCase()
-      const isSuccess = s.includes('success') || s.includes('เสร็จสิ้น') || s.includes('เรียบร้อย') || s.includes('สำเร็จ')
-      return !isSuccess
+      const s = (r.payment_status || '').toLowerCase()
+      return s.includes('ยังไม่') || s.includes('unpaid') || s.includes('ค้าง')
     })
   }
 
@@ -250,9 +175,9 @@ const filteredTrcloudRows = computed(() => {
     rows = rows.filter(r => r.project === projectFilter.value)
   }
 
-  // Filter by Status
+  // Filter by Status (Payment Status)
   if (statusFilter.value) {
-    rows = rows.filter(r => r.status === statusFilter.value)
+    rows = rows.filter(r => r.payment_status === statusFilter.value)
   }
 
   // Filter by Month
@@ -263,26 +188,30 @@ const filteredTrcloudRows = computed(() => {
   // Search filter
   const q = trcloudFilter.value.toLowerCase().trim()
   if (q) {
-    rows = rows.filter(r =>
+    rows = rows.filter(r => 
       JSON.stringify(r).toLowerCase().includes(q)
     )
   }
 
-  // Sort
+  // Sort by Tracking status first, then by Date Descending
   return [...rows].sort((a, b) => {
+    // If in tracking mode, show tracked items at the top
     if (viewMode.value === 'tracking') {
-      // ใช้ frozenOrder เพื่อให้ลำดับไม่กระโดดระหว่าง session
       const idA = getRowIdentity(a)
       const idB = getRowIdentity(b)
-      const orderA = frozenOrder.value.indexOf(idA)
-      const orderB = frozenOrder.value.indexOf(idB)
+      const trackedA = trackedRowIds.value.indexOf(idA)
+      const trackedB = trackedRowIds.value.indexOf(idB)
 
-      // ถ้าทั้งคู่อยู่ใน frozenOrder: เรียงตาม frozenOrder (index น้อย = ล่าสุด = ขึ้นบน)
-      if (orderA !== -1 && orderB !== -1) return orderA - orderB
-      // A อยู่ใน frozenOrder, B ไม่อยู่: A ขึ้นบน
-      if (orderA !== -1) return -1
-      // B อยู่ใน frozenOrder, A ไม่อยู่: B ขึ้นบน
-      if (orderB !== -1) return 1
+      // Both are tracked: sort by their order in trackedRowIds (most recent first)
+      if (trackedA !== -1 && trackedB !== -1) {
+        return trackedA - trackedB
+      }
+      
+      // Only A is tracked: A comes first
+      if (trackedA !== -1) return -1
+      
+      // Only B is tracked: B comes first
+      if (trackedB !== -1) return 1
     }
 
     // Default: sort by Date Descending
@@ -296,10 +225,13 @@ function getTrcloudBadgeInfo(status) {
   if (!status) return { text: '—', bg: 'rgba(148,163,184,0.1)', color: '#94a3b8', border: 'rgba(148,163,184,0.3)' }
   const s = status.toString().toLowerCase()
   if (s.includes('ชำระแล้ว') || s.includes('paid') || s.includes('complete') || s.includes('อนุมัติ')) {
-    return { text: status, bg: 'rgba(16,185,129,0.1)', color: '#10b981', border: 'rgba(16,185,129,0.3)' }
+    return { text: 'ชำระแล้ว', bg: 'rgba(16,185,129,0.1)', color: '#10b981', border: 'rgba(16,185,129,0.3)' }
+  }
+  if (s.includes('ชำระบางส่วน') || s.includes('partial')) {
+    return { text: 'ชำระบางส่วน', bg: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: 'rgba(59,130,246,0.3)' }
   }
   if (s.includes('ยังไม่') || s.includes('ค้าง') || s.includes('unpaid') || s.includes('cancel')) {
-    return { text: status, bg: 'rgba(239,68,68,0.1)', color: '#ef4444', border: 'rgba(239,68,68,0.3)' }
+    return { text: 'ยังไม่ชำระ', bg: 'rgba(239,68,68,0.1)', color: '#ef4444', border: 'rgba(239,68,68,0.3)' }
   }
   if (s.includes('รอ') || s.includes('pending') || s.includes('draft') || s.includes('ส่ง')) {
     return { text: status, bg: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: 'rgba(245,158,11,0.3)' }
@@ -330,30 +262,59 @@ function getDocMonth(row) {
   return monthPart && monthPart.length === 2 ? monthPart : ''
 }
 
-function isSuccessStatus(status) {
+function getRowIdentity(row) {
+  return String(row.invoice_number || row.document_number || row.expense_id || row.id || '')
+}
+
+function isPaidStatus(status) {
   const s = (status || '').toString().toLowerCase()
-  return s.includes('success') || s.includes('เสร็จสิ้น') || s.includes('เรียบร้อย')
+  return s.includes('ชำระแล้ว') || s.includes('paid') || s.includes('complete') || s.includes('อนุมัติ')
+}
+
+function isTracked(row) {
+  const id = getRowIdentity(row)
+  return id ? trackedRowIds.value.includes(id) : false
+}
+
+function toggleTracked(row, checked) {
+  const currentId = getRowIdentity(row)
+  if (!currentId) return
+
+  if (checked) {
+    // Select all rows with the same document number
+    const relatedRows = trcloudStore.apRows.filter(r => getRowIdentity(r) === currentId)
+    const newIds = relatedRows.map(getRowIdentity).filter(Boolean)
+    
+    trackedRowIds.value = [...new Set([currentId, ...trackedRowIds.value, ...newIds])]
+    persistTrackedRowIds()
+    setTrackedCloud(newIds, true)
+  } else {
+    // Deselect ONLY this specific row
+    trackedRowIds.value = trackedRowIds.value.filter((x) => x !== currentId)
+    persistTrackedRowIds()
+    setTrackedCloud(currentId, false)
+  }
 }
 
 function getDisplayBadgeInfo(row) {
   const tracked = isTracked(row)
-  if (tracked && !isSuccessStatus(row.status)) {
+  if (tracked && !isPaidStatus(row.payment_status)) {
     return {
-      text: getTrcloudBadgeInfo(row.status).text,
+      text: getTrcloudBadgeInfo(row.payment_status).text,
       bg: 'rgba(239,68,68,0.15)',
       color: '#ef4444',
       border: 'rgba(239,68,68,0.35)'
     }
   }
-  return getTrcloudBadgeInfo(row.status)
+  return getTrcloudBadgeInfo(row.payment_status)
 }
 </script>
 
 <template>
   <div>
     <div class="mb-6">
-      <h1 class="text-[20px] font-semibold" style="color: var(--color-text-primary)">รายการ PO</h1>
-      <p class="text-[13px] mt-0.5" style="color: var(--color-text-muted)">จัดการข้อมูลใบสั่งซื้อจาก TRCLOUD</p>
+      <h1 class="text-[20px] font-semibold" style="color: var(--color-text-primary)">รายการ AP</h1>
+      <p class="text-[13px] mt-0.5" style="color: var(--color-text-muted)">จัดการข้อมูลบิลค่าใช้จ่ายจาก TRCLOUD</p>
     </div>
 
     <!-- Mode Switcher -->
@@ -378,20 +339,20 @@ function getDisplayBadgeInfo(row) {
             : 'text-gray-500 hover:text-gray-700'
         ]"
       >
-        ติดตามงาน
+        ติดตามงาน (ยังไม่ชำระ)
       </button>
     </div>
 
     <!-- KPI Card -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
       <div class="p-4 rounded-xl border relative overflow-hidden" style="background: var(--color-bg-card); border-color: var(--color-border)">
-        <div class="absolute top-0 left-0 w-full h-1 bg-purple-500"></div>
+        <div class="absolute top-0 left-0 w-full h-1 bg-yellow-500"></div>
         <div class="text-[12px] font-medium uppercase tracking-wider mb-2" style="color: var(--color-text-muted)">
-          {{ viewMode === 'all' ? 'ใบสั่งซื้อ (ทั้งหมด)' : 'ใบสั่งซื้อ (ติดตามงาน)' }}
+          {{ viewMode === 'all' ? 'บิลค่าใช้จ่าย (ทั้งหมด)' : 'บิลค่าใช้จ่าย (ติดตามงาน)' }}
         </div>
-        <div class="text-2xl font-bold font-mono" style="color: var(--color-text-primary)">{{ trcloudKpi.poCount }}</div>
+        <div class="text-2xl font-bold font-mono" style="color: var(--color-text-primary)">{{ trcloudKpi.apCount }}</div>
         <div class="text-[13px] mt-1" style="color: var(--color-text-muted)">
-          มูลค่ารวม <span class="font-mono text-purple-500 font-bold">{{ Number(trcloudKpi.poAmt).toLocaleString('th-TH') }} ฿</span>
+          ค้างชำระ <span class="font-mono text-yellow-500 font-bold">{{ trcloudKpi.apUnpaidCount }} ใบ / {{ Number(trcloudKpi.apUnpaidAmt).toLocaleString('th-TH') }} ฿</span>
         </div>
       </div>
     </div>
@@ -408,6 +369,7 @@ function getDisplayBadgeInfo(row) {
           <input v-model="trcloudDateTo" type="date" class="px-3 py-1.5 bg-transparent border rounded-lg text-[13px] focus:outline-none" style="border-color: var(--color-border); color: var(--color-text-primary)" />
         </div>
 
+        <!-- Project Filter -->
         <div class="flex items-center gap-2">
           <label class="text-[12px] font-medium" style="color: var(--color-text-muted)">โครงการ</label>
           <select v-model="projectFilter" class="px-3 py-1.5 bg-transparent border rounded-lg text-[13px] focus:outline-none min-w-[150px]" style="border-color: var(--color-border); color: var(--color-text-primary)">
@@ -416,8 +378,9 @@ function getDisplayBadgeInfo(row) {
           </select>
         </div>
 
+        <!-- Status Filter -->
         <div class="flex items-center gap-2">
-          <label class="text-[12px] font-medium" style="color: var(--color-text-muted)">สถานะ</label>
+          <label class="text-[12px] font-medium" style="color: var(--color-text-muted)">สถานะการชำระ</label>
           <select v-model="statusFilter" class="px-3 py-1.5 bg-transparent border rounded-lg text-[13px] focus:outline-none min-w-[120px]" style="border-color: var(--color-border); color: var(--color-text-primary)">
             <option value="">ทั้งหมด</option>
             <option v-for="s in availableStatuses" :key="s" :value="s">{{ s }}</option>
@@ -439,32 +402,31 @@ function getDisplayBadgeInfo(row) {
       </div>
       <div class="relative w-full">
         <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-[14px]" style="color: var(--color-text-muted)"></i>
-        <input v-model="trcloudFilter" type="text" placeholder="ค้นหาใน PO..." class="w-full pl-9 pr-4 py-2 bg-transparent border rounded-lg text-[13px] focus:outline-none focus:ring-1 transition-all" style="border-color: var(--color-border); color: var(--color-text-primary)" />
+        <input v-model="trcloudFilter" type="text" placeholder="ค้นหาใน AP..." class="w-full pl-9 pr-4 py-2 bg-transparent border rounded-lg text-[13px] focus:outline-none focus:ring-1 transition-all" style="border-color: var(--color-border); color: var(--color-text-primary)" />
       </div>
     </div>
 
     <!-- Table -->
     <div class="rounded-xl border overflow-hidden" style="background: var(--color-bg-card); border-color: var(--color-border)">
       <div class="overflow-x-auto">
-        <table class="w-full text-[13px] min-w-[1060px] border-collapse">
+        <table class="w-full text-[13px] min-w-[1000px] border-collapse table-fixed">
           <thead>
             <tr style="background: var(--color-bg-body); border-bottom: 1px solid var(--color-border)">
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">เลขที่เอกสาร</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิงEXP</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อายุเอกสาร</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ผู้ขาย/หน่วยงาน</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">Staff</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิง PR</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">โครงการ</th>
-              <th class="px-4 py-3 text-right font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">มูลค่า</th>
-              <th class="px-4 py-3 text-center font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ติดตาม</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted)">สถานะ</th>
+              <th class="px-4 py-3 text-left font-medium w-[130px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">เลขที่เอกสาร</th>
+              <th class="px-4 py-3 text-left font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่</th>
+              <th class="px-4 py-3 text-left font-medium w-[90px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อายุเอกสาร</th>
+              <th class="px-4 py-3 text-left font-medium min-w-[180px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ผู้ขาย/หน่วยงาน</th>
+              <th class="px-4 py-3 text-left font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">Staff</th>
+              <th class="px-4 py-3 text-left font-medium w-[110px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิง PO</th>
+              <th class="px-4 py-3 text-left font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ครบกำหนด</th>
+              <th class="px-4 py-3 text-right font-medium w-[110px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">มูลค่า</th>
+              <th class="px-4 py-3 text-left font-medium w-[110px]" style="color: var(--color-text-muted)">การชำระ</th>
+              <th class="px-4 py-3 text-center font-medium w-[70px]" style="color: var(--color-text-muted)">ติดตาม</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="trcloudLoading">
-              <td colspan="11" class="px-4 py-12 text-center">
+              <td colspan="10" class="px-4 py-12 text-center">
                 <div class="flex flex-col items-center gap-2">
                   <i class="fa-solid fa-circle-notch fa-spin text-2xl text-blue-500"></i>
                   <span style="color: var(--color-text-muted)">กำลังดึงข้อมูลจาก TRCLOUD...</span>
@@ -472,35 +434,29 @@ function getDisplayBadgeInfo(row) {
               </td>
             </tr>
             <tr v-else-if="!filteredTrcloudRows.length">
-              <td colspan="11" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูล PO จาก TRCLOUD</td>
+              <td colspan="10" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูล AP จาก TRCLOUD</td>
             </tr>
-            <tr
-              v-for="r in filteredTrcloudRows"
-              :key="r.unique_id || r.po_id || r.id"
-              class="hover:bg-gray-50/50 transition-colors"
-              style="border-bottom: 1px solid var(--color-border)"
-            >
-              <td class="px-4 py-3 font-medium font-mono" style="color: #7c3aed; border-right: 1px solid var(--color-border)">{{ r.document_number || r.po_id || '-' }}</td>
-              <td class="px-4 py-3 font-mono" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.expense || r.expense_no || r.expense_number || r.expense_doc || r.expense_id || '-' }}</td>
+            <tr v-for="r in filteredTrcloudRows" :key="r.expense_id || r.id" class="hover:bg-gray-50/50 transition-colors border-bottom" style="border-bottom: 1px solid var(--color-border)">
+              <td class="px-4 py-3 font-medium font-mono break-all" style="color: #f59e0b; border-right: 1px solid var(--color-border)">{{ r.invoice_number || r.document_number || r.expense_id || '-' }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.issue_date || '-' }}</td>
               <td class="px-4 py-3 font-medium" style="color: #3b82f6; border-right: 1px solid var(--color-border)">{{ calculateDocAge(r.issue_date || r.date) }}</td>
-              <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.organization || '-' }}</td>
-              <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ getStaffName(r) }}</td>
-              <td class="px-4 py-3 font-mono" style="color: #00d4ff; border-right: 1px solid var(--color-border)">{{ r.pr || r.reference || '-' }}</td>
-              <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.project || '-' }}</td>
+              <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.organization || '-' }}</td>
+              <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ getStaffName(r) }}</td>
+              <td class="px-4 py-3 font-mono break-all" style="color: #7c3aed; border-right: 1px solid var(--color-border)">{{ r.po || r.reference || '-' }}</td>
+              <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.due_date || '-' }}</td>
               <td class="px-4 py-3 text-right font-mono" style="color: #f59e0b; border-right: 1px solid var(--color-border)">{{ Number(r.grand_total || 0).toLocaleString('th-TH', {minimumFractionDigits:2, maximumFractionDigits:2}) }}</td>
-              <td class="px-4 py-3 text-center" style="border-right: 1px solid var(--color-border)">
+              <td class="px-4 py-3">
+                <span class="px-3 py-1 rounded-full text-[11px] font-semibold border inline-block text-center w-full" :style="{ backgroundColor: getDisplayBadgeInfo(r).bg, color: getDisplayBadgeInfo(r).color, borderColor: getDisplayBadgeInfo(r).border }">
+                  {{ getDisplayBadgeInfo(r).text }}
+                </span>
+              </td>
+              <td class="px-4 py-3 text-center">
                 <input
                   :checked="isTracked(r)"
                   type="checkbox"
                   class="w-4 h-4 accent-red-600 cursor-pointer"
                   @change="toggleTracked(r, $event.target.checked)"
                 />
-              </td>
-              <td class="px-4 py-3">
-                <span class="px-3 py-1 rounded-full text-[11px] font-semibold border" :style="{ backgroundColor: getDisplayBadgeInfo(r).bg, color: getDisplayBadgeInfo(r).color, borderColor: getDisplayBadgeInfo(r).border }">
-                  {{ getDisplayBadgeInfo(r).text }}
-                </span>
               </td>
             </tr>
           </tbody>
