@@ -1,19 +1,62 @@
+let cachedCookie = null;
+let cachedTimestamp = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function getLatestCookie(env) {
+  const now = Date.now();
+  if (cachedCookie && now - cachedTimestamp < CACHE_TTL_MS) {
+    return cachedCookie;
+  }
+
+  // ใช้ SUPABASE_URL และ SUPABASE_ANON_KEY จาก Environment ของ Cloudflare
+  const supabaseUrl = env.SUPABASE_URL || env.VITE_SUPABASE_URL_MWM;
+  const supabaseKey = env.SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY_MWM;
+
+  if (!supabaseUrl || !supabaseKey) {
+    // ถ้าไม่มี Supabase config ให้ใช้ TRCLOUD_COOKIE ตรงๆ (ถ้ามี)
+    return env.TRCLOUD_COOKIE || null;
+  }
+
+  const url = `${supabaseUrl}/rest/v1/trcloud_session?is_active=eq.true&order=updated_at.desc&limit=1&select=cookie_value`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`,
+      }
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.length > 0) {
+        cachedCookie = data[0].cookie_value;
+        cachedTimestamp = now;
+        return cachedCookie;
+      }
+    }
+  } catch (err) {
+    console.error('Fetch Supabase cookie failed:', err);
+  }
+
+  return env.TRCLOUD_COOKIE || null;
+}
+
+function clearCache() {
+  cachedCookie = null;
+  cachedTimestamp = 0;
+}
+
 export async function onRequest(context) {
-  const { request, params } = context;
+  const { request, params, env } = context;
   const url = new URL(request.url);
   
-  // path จะถูกจับโดย [[path]] ในชื่อไฟล์
-  // เช่น /trcloud-api/some/path -> params.path = ["some", "path"]
   const path = params.path ? params.path.join('/') : '';
   const search = url.search;
-  
   const targetUrl = `https://thaidrill.trcloud.co/${path}${search}`;
   
-  // คัดลอก headers จาก request เดิม
   const newHeaders = new Headers(request.headers);
-  
-  // ตั้งค่า headers ที่จำเป็นสำหรับ TRCloud
   newHeaders.set('Origin', 'https://thaidrill.trcloud.co');
+  
   const pathLower = path.toLowerCase();
   let referer = 'https://thaidrill.trcloud.co/application/';
   if (pathLower.includes('invoice_list.php')) {
@@ -28,40 +71,55 @@ export async function onRequest(context) {
   newHeaders.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
 
   // จัดการเรื่อง Cookie
-  // 1. ดึงจาก Header x-trcloud-cookie (ส่งมาจาก Client/Browser)
-  // 2. ถ้าไม่มี ให้ดึงจาก Environment Variable TRCLOUD_COOKIE (ตั้งค่าใน Cloudflare Dashboard)
-  let clientCookie = request.headers.get('x-trcloud-cookie');
-  if (!clientCookie && context.env && context.env.TRCLOUD_COOKIE) {
-    clientCookie = context.env.TRCLOUD_COOKIE;
+  let cookie = request.headers.get('x-trcloud-cookie');
+  if (!cookie) {
+    cookie = await getLatestCookie(env);
   }
 
-  if (clientCookie) {
-    newHeaders.set('Cookie', clientCookie);
+  if (cookie) {
+    newHeaders.set('Cookie', cookie);
     newHeaders.delete('x-trcloud-cookie');
   }
 
-  // สร้าง request ใหม่เพื่อส่งไปยัง TRCloud
-  const modifiedRequest = new Request(targetUrl, {
-    method: request.method,
-    headers: newHeaders,
-    body: request.method !== 'GET' && request.method !== 'HEAD' ? await request.arrayBuffer() : null,
-    redirect: 'follow'
-  });
+  const bodyBuffer = request.method !== 'GET' && request.method !== 'HEAD' ? await request.arrayBuffer() : null;
+
+  const doFetch = async (currentCookie) => {
+    const headers = new Headers(newHeaders);
+    if (currentCookie) {
+      headers.set('Cookie', currentCookie);
+    }
+    const modReq = new Request(targetUrl, {
+      method: request.method,
+      headers: headers,
+      body: bodyBuffer,
+      redirect: 'follow'
+    });
+    return fetch(modReq);
+  };
 
   try {
-    const response = await fetch(modifiedRequest);
+    let response = await doFetch(cookie);
     
-    // สร้าง response ใหม่เพื่อส่งกลับไปยัง Browser
+    // ถ้าเจอ "mismatched" หรือ "No data" อาจเป็นเพราะ Session หมดอายุ ให้ลองล้าง Cache แล้วดึงใหม่
+    if (response.ok) {
+      const clone = response.clone();
+      const text = await clone.text();
+      if (text.includes('mismatched') || text.includes('No data is received')) {
+        clearCache();
+        const freshCookie = await getLatestCookie(env);
+        if (freshCookie && freshCookie !== cookie) {
+          response = await doFetch(freshCookie);
+        }
+      }
+    }
+
     const newResponse = new Response(response.body, response);
-    
-    // ตั้งค่า CORS (ถ้าจำเป็น แม้ว่าจะเป็น origin เดียวกันบน Pages ก็ตาม)
     newResponse.headers.set('Access-Control-Allow-Origin', '*');
-    
     return newResponse;
   } catch (err) {
     return new Response(JSON.stringify({ error: err.message }), { 
       status: 500,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
     });
   }
 }
