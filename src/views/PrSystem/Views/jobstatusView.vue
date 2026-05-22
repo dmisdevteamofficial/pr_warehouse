@@ -2,8 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 
 const auth = useAuthStore()
+const ui = useUiStore()
 
 const loading = ref(true)
 const saving = ref(false)
@@ -97,7 +99,7 @@ async function fetchJobStatus() {
       _creator: r.created_by ? creatorById[r.created_by] : null,
     }))
   } catch (err) {
-    alert('โหลดข้อมูลสถานะรับงานไม่สำเร็จ: ' + getErrorText(err))
+    ui.showToast('โหลดข้อมูลสถานะรับงานไม่สำเร็จ: ' + getErrorText(err), 'error')
     rows.value = []
   } finally {
     loading.value = false
@@ -135,7 +137,10 @@ function goNext() {
 }
 
 function openCreate() {
-  if (!auth.user?.id) return alert('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่')
+  if (!auth.user?.id) {
+    ui.showToast('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่', 'warning')
+    return
+  }
   modalMode.value = 'create'
   editingId.value = null
   form.value = { job_name: '' }
@@ -143,7 +148,10 @@ function openCreate() {
 }
 
 function openEdit(row) {
-  if (!auth.user?.id) return alert('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่')
+  if (!auth.user?.id) {
+    ui.showToast('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่', 'warning')
+    return
+  }
   modalMode.value = 'edit'
   editingId.value = row?.id ?? null
   form.value = { job_name: row?.job_name ?? '' }
@@ -155,9 +163,15 @@ function closeModal() {
 }
 
 async function submit() {
-  if (!auth.user?.id) return alert('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่')
-  const name = (form.value.job_name || '').trim()
-  if (!name) return alert('กรุณากรอกสถานะรับงาน')
+  if (!auth.user?.id) {
+    ui.showToast('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่', 'warning')
+    return
+  }
+  const name = form.value.job_name.trim()
+  if (!name) {
+    ui.showToast('กรุณากรอกสถานะรับงาน', 'warning')
+    return
+  }
 
   saving.value = true
   try {
@@ -168,7 +182,7 @@ async function submit() {
         .update({ job_name: name })
         .eq('id', editingId.value)
       if (error) throw error
-      alert('แก้ไขข้อมูลสำเร็จ')
+      ui.showToast('แก้ไขข้อมูลสำเร็จ', 'success')
     } else {
       const payload = {
         job_name: name,
@@ -176,13 +190,13 @@ async function submit() {
       }
       const { error } = await supabase.from('pre_job_status').insert(payload)
       if (error) throw error
-      alert('บันทึกข้อมูลสำเร็จ')
+      ui.showToast('บันทึกข้อมูลสำเร็จ', 'success')
     }
 
     closeModal()
     await fetchJobStatus()
   } catch (err) {
-    alert('บันทึกข้อมูลไม่สำเร็จ: ' + getErrorText(err))
+    ui.showToast('บันทึกข้อมูลไม่สำเร็จ: ' + getErrorText(err), 'error')
   } finally {
     saving.value = false
   }
@@ -196,7 +210,7 @@ async function removeRow(row) {
     if (error) throw error
     await fetchJobStatus()
   } catch (err) {
-    alert('ลบข้อมูลไม่สำเร็จ: ' + getErrorText(err))
+    ui.showToast('ลบข้อมูลไม่สำเร็จ: ' + getErrorText(err), 'error')
   }
 }
 </script>

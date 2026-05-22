@@ -3,9 +3,11 @@ import { computed, onMounted, ref } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { supabase, supabaseEmployee } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 import bcrypt from 'bcryptjs'
 
 const auth = useAuthStore()
+const ui = useUiStore()
 
 const loading = ref(true)
 const saving = ref(false)
@@ -102,7 +104,7 @@ async function fetchSystemUsers() {
       }))
       .filter((row) => row.role !== 'super_admin')
   } catch (err) {
-    alert('โหลดข้อมูลผู้ใช้งานระบบไม่สำเร็จ: ' + err.message)
+    ui.showToast('โหลดข้อมูลผู้ใช้งานระบบไม่สำเร็จ: ' + err.message, 'error')
     systemUsers.value = []
   } finally {
     loading.value = false
@@ -141,7 +143,10 @@ function goNext() {
 }
 
 function openCreate() {
-  if (!auth.user?.id) return alert('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่')
+  if (!auth.user?.id) {
+    ui.showToast('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่', 'warning')
+    return
+  }
   isCreateOpen.value = true
   employeeSearchText.value = ''
   selectedEmployee.value = null
@@ -181,9 +186,9 @@ function onEmployeeInput() {
 
 async function searchEmployees() {
   if (!supabaseEmployee) {
-    alert('ยังไม่ได้ตั้งค่า .env ของฐานข้อมูลพนักงาน (VITE_SUPABASE_EMPLOYEE_PROJECT2_DB / VITE_SUPABASE_DB_ANON_KEY_EMPLOYEE_PROJECT2)')
-    return
-  }
+      ui.showToast('ยังไม่ได้ตั้งค่า .env ของฐานข้อมูลพนักงาน (VITE_SUPABASE_EMPLOYEE_PROJECT2_DB / VITE_SUPABASE_DB_ANON_KEY_EMPLOYEE_PROJECT2)', 'error')
+      return
+    }
 
   const raw = employeeSearchText.value.trim()
   // รองรับกรณีช่องค้นหาแสดงเป็น "CODE - FULLNAME"
@@ -217,7 +222,7 @@ async function searchEmployees() {
       employeeActiveIndex.value = -1
     }
   } catch (err) {
-    alert('ค้นหาพนักงานไม่สำเร็จ: ' + err.message)
+    ui.showToast('ค้นหาพนักงานไม่สำเร็จ: ' + err.message, 'error')
     selectedEmployee.value = null
     employeeHint.value = ''
     employeeResults.value = []
@@ -269,12 +274,30 @@ function creatorText(row) {
 }
 
 async function submitCreate() {
-  if (!auth.user?.id) return alert('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่')
-  if (!selectedEmployee.value?.employee_code || !selectedEmployee.value?.fullname) return alert('กรุณาเลือกพนักงานจากช่องค้นหา')
-  if (!form.value.username) return alert('กรุณากรอก Username')
-  if (!form.value.password) return alert('กรุณากรอก Password')
-  if (selectedEmpAlreadyHasUser.value) return alert('พนักงานรหัสนี้มีผู้ใช้งานระบบอยู่แล้ว (emp_code ซ้ำ)')
-  if (existingUsernames.value.has(form.value.username)) return alert('Username นี้ถูกใช้งานแล้ว กรุณาเปลี่ยน Username')
+  if (!auth.user?.id) {
+    ui.showToast('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่', 'warning')
+    return
+  }
+  if (!selectedEmployee.value?.employee_code || !selectedEmployee.value?.fullname) {
+    ui.showToast('กรุณาเลือกพนักงานจากช่องค้นหา', 'warning')
+    return
+  }
+  if (!form.value.username) {
+    ui.showToast('กรุณากรอก Username', 'warning')
+    return
+  }
+  if (!form.value.password) {
+    ui.showToast('กรุณากรอก Password', 'warning')
+    return
+  }
+  if (selectedEmpAlreadyHasUser.value) {
+    ui.showToast('พนักงานรหัสนี้มีผู้ใช้งานระบบอยู่แล้ว (emp_code ซ้ำ)', 'warning')
+    return
+  }
+  if (existingUsernames.value.has(form.value.username)) {
+    ui.showToast('Username นี้ถูกใช้งานแล้ว กรุณาเปลี่ยน Username', 'warning')
+    return
+  }
 
   saving.value = true
   try {
@@ -315,9 +338,9 @@ async function submitCreate() {
 
     closeCreate()
     await fetchSystemUsers()
-    alert('บันทึกผู้ใช้งานระบบสำเร็จ')
+    ui.showToast('บันทึกผู้ใช้งานระบบสำเร็จ', 'success')
   } catch (err) {
-    alert('บันทึกผู้ใช้งานระบบไม่สำเร็จ: ' + err.message)
+    ui.showToast('บันทึกผู้ใช้งานระบบไม่สำเร็จ: ' + err.message, 'error')
   } finally {
     saving.value = false
   }

@@ -221,6 +221,28 @@ export const useTrcloudStore = defineStore('trcloud', () => {
   const loading = ref(false)
   const lastFetched = ref(null)
   const pendingAutofill = ref(null) // สำหรับส่งข้อมูลข้ามหน้า
+
+  // Persistent state for appoView.vue
+  const appoFormState = ref({
+    ap_number: '',
+    po_id: '',
+    po_date: '',
+    supplier_name: '',
+    item_ref: '',
+    qty_order: null,
+    department: '',
+    po_created_by: '',
+    date_transfer: '',
+    option_name: '',
+    total_price: null,
+    currency_name: '',
+    ap_status: '',
+    qty_received: null,
+    desired_date: '',
+    remark: '',
+  })
+  const appoRowsState = ref([])
+  const appoApSearchTextState = ref('')
   
   // Default date range is rolling 4 months (current month + previous 3 months).
   const getInitialDates = () => {
@@ -536,7 +558,7 @@ export const useTrcloudStore = defineStore('trcloud', () => {
                 if (remain === 0 || rawStatus.includes('paid') || rawStatus.includes('ชำระแล้ว') || rawStatus.includes('success') || rawStatus.includes('complete') || rawStatus.includes('อนุมัติ')) {
                   status = 'ชำระแล้ว'
                 } else if (remain > 0 && remain < total) {
-                  status = 'ชำระบางส่วน'
+                  status = 'ยังไม่ชำระ'
                 }
                 return { ...x, payment_status: status }
               })
@@ -638,6 +660,7 @@ export const useTrcloudStore = defineStore('trcloud', () => {
     apItemRows, poItemRows,
     loading, lastFetched, isLoaded,
     dateFrom, dateTo,
+    appoFormState, appoRowsState, appoApSearchTextState,
     fetchAll, fetchTrcloudData
   }
 })

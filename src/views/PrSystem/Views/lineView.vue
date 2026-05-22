@@ -2,8 +2,10 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 
 const auth = useAuthStore()
+const ui = useUiStore()
 
 const loading = ref(true)
 const rows = ref([])
@@ -102,8 +104,8 @@ async function fetchRows() {
 
     const q =
       viewMode.value === 'slip'
-        ? base.in('ap_status', ['จ่ายครบ', 'รอชำระ']).order('ap_status', { ascending: true }).order('desired_date', { ascending: true, nullsFirst: false }).order('created_at', { ascending: false })
-        : base.eq('ap_status', 'รอชำระ').order('desired_date', { ascending: true, nullsFirst: false }).order('created_at', { ascending: false })
+        ? base.in('ap_status', ['ชำระแล้ว', 'ยังไม่ชำระ']).order('ap_status', { ascending: true }).order('desired_date', { ascending: true, nullsFirst: false }).order('created_at', { ascending: false })
+        : base.eq('ap_status', 'ยังไม่ชำระ').order('desired_date', { ascending: true, nullsFirst: false }).order('created_at', { ascending: false })
 
     const { data, error } = await q
     if (error) throw error
@@ -111,7 +113,7 @@ async function fetchRows() {
     
     await fetchStatuses()
   } catch (err) {
-    alert('โหลดข้อมูลไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'))
+    ui.showToast('โหลดข้อมูลไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'), 'error')
     rows.value = []
     statusByMode.value = { pay: {}, slip: {} }
     systemUsersById.value = {}
@@ -123,12 +125,15 @@ async function fetchRows() {
 async function fetchCounts() {
   countsLoading.value = true
   try {
-    const [payRes, paidRes] = await Promise.all([
-      supabase.from('ap_requests').select('*', { count: 'exact', head: true }).eq('ap_status', 'รอชำระ'),
-      supabase.from('ap_requests').select('*', { count: 'exact', head: true }).eq('ap_status', 'จ่ายครบ'),
-    ])
-    statusCounts.value = { pay: payRes.count ?? 0, paid: paidRes.count ?? 0 }
+    const { data, error } = await supabase.from('ap_requests').select('ap_status')
+    if (error) throw error
+    const list = data || []
+    statusCounts.value = {
+      pay: list.filter((r) => r.ap_status === 'ยังไม่ชำระ').length,
+      paid: list.filter((r) => r.ap_status === 'ชำระแล้ว').length,
+    }
   } catch {
+    statusCounts.value = { pay: 0, paid: 0 }
   } finally {
     countsLoading.value = false
   }
@@ -176,18 +181,17 @@ function selectRow(id) {
   const r = (rows.value || []).find(x => x.id === id)
   if (!r) return
 
-  const apNum = r.ap_number
-  // ค้นหาแถวทั้งหมดที่มี ap_number เดียวกัน
-  const sameApRows = (rows.value || []).filter(x => x.ap_number === apNum)
-  const sameApIds = sameApRows.map(x => x.id)
-
   const isAlreadySelected = selectedRowIds.value.includes(id)
   
   if (isAlreadySelected) {
-    // เอาออกทั้งกลุ่ม
-    selectedRowIds.value = selectedRowIds.value.filter(x => !sameApIds.includes(x))
+    // เอาออกเฉพาะรายการที่คลิก เพื่อให้สามารถยกเลิกบางรายการในกลุ่มได้
+    selectedRowIds.value = selectedRowIds.value.filter(x => x !== id)
   } else {
-    // เพิ่มทั้งกลุ่ม
+    // เพิ่มทั้งกลุ่มที่มี ap_number เดียวกัน
+    const apNum = r.ap_number
+    const sameApRows = (rows.value || []).filter(x => x.ap_number === apNum)
+    const sameApIds = sameApRows.map(x => x.id)
+
     const newIds = [...selectedRowIds.value]
     for (const sid of sameApIds) {
       if (!newIds.includes(sid)) newIds.push(sid)
@@ -257,7 +261,7 @@ function buildMultiPaymentMessage(selectedList) {
     if (!catRows.length) continue
     
     blocks.push(paymentSectionTitle(catRows[0].option_name))
-    blocks.push(``)
+    // blocks.push(``) // Remove extra newline
 
     // Group by Supplier within category
     const supplierGroups = {}
@@ -283,14 +287,13 @@ function buildMultiPaymentMessage(selectedList) {
       for (const [ap, apRows] of Object.entries(apGroups)) {
         const first = apRows[0]
         const po = String(first.po_id || '').trim() || '-'
-        blocks.push(`${apIndex}. ${ap} | ${po}`)
         
         for (const r of apRows) {
           const item = String(r.item_ref || '').trim() || '-'
           const qty = r.qty_order === null || r.qty_order === undefined || r.qty_order === '' ? '-' : String(r.qty_order)
           const total = moneyText(r.total_price, r.currency_name)
           
-          blocks.push(`  • ${item}  |  จำนวน: ${qty}  |  ยอด: ${total}`)
+          blocks.push(`${apIndex}. ${ap} | ${po} • ${item} | จำนวน: ${qty} | ยอด: ${total}`)
 
           const cur = String(r.currency_name || '').trim() || '-'
           const amt = Number(r.total_price || 0)
@@ -305,8 +308,8 @@ function buildMultiPaymentMessage(selectedList) {
             groupPendingItemCount++
             overallPendingItemCount++
           }
+          apIndex++
         }
-        apIndex++
       }
 
       const firstRow = groupRows[0]
@@ -316,7 +319,8 @@ function buildMultiPaymentMessage(selectedList) {
       blocks.push(`🏪 ร้านค้า: ${supplierName}`)
       blocks.push(`📅 ต้องการของ: ${desiredIso}`)
       blocks.push(`✍️ เหตุผล: ${remark}`)
-      blocks.push(`💰 ยอดรวม: ${currencySumText(groupSumByCurrency)}  📦 ของค้างรับ: ${formatNumber(groupPendingItemCount)} รายการ`)
+      blocks.push(`💰 ยอดรวม: ${currencySumText(groupSumByCurrency)}`)
+      blocks.push(`📦 ของค้างรับ: ${formatNumber(groupPendingItemCount)} รายการ`)
       blocks.push(``)
     }
     blocks.push(`————————`)
@@ -326,7 +330,7 @@ function buildMultiPaymentMessage(selectedList) {
   blocks.push(`💰 ${currencySumText(overallSumByCurrency)}`)
   blocks.push(`📦 ของค้างรับ PO เดิม: ${formatNumber(overallPendingItemCount)} รายการ — โปรดตามซัพพลายเออร์`)
   blocks.push(`————————`)
-  blocks.push(`กรุณาแจ้งยืนยัน หรือโอนพร้อมระบุเลข AP ในหมายเหตุ`)
+  blocks.push(`กรุณาแจ้งยืนยัน หรือโอนพร้อมระบุเลข AP ในหมายเหตุ และ มียอดรวมด้วยนะครับ`)
   
   return blocks.join('\n')
 }
@@ -337,8 +341,8 @@ function buildSlipConfirmMessageFromRows(list) {
   const dateText = formatThaiDateBuddhist(now)
   const timeText = formatThaiTime(now)
 
-  const matchedRaw = rowsAll.filter((x) => String(x?.ap_status || '').trim() === 'จ่ายครบ')
-  const pendingRaw = rowsAll.filter((x) => String(x?.ap_status || '').trim() === 'รอชำระ')
+  const matchedRaw = rowsAll.filter((x) => String(x?.ap_status || '').trim() === 'ชำระแล้ว')
+  const pendingRaw = rowsAll.filter((x) => String(x?.ap_status || '').trim() === 'ยังไม่ชำระ')
 
   const seenMatched = new Set()
   const matched = matchedRaw.filter((r) => {
@@ -509,7 +513,10 @@ async function fetchStatuses() {
 async function logActionForRow(rowId, action) {
   const r = (rows.value || []).find((x) => x.id === rowId)
   if (!r) return
-  if (!auth.user?.id) return alert('ไม่พบข้อมูลผู้ใช้งาน กรุณาเข้าสู่ระบบใหม่')
+  if (!auth.user?.id) {
+    ui.showToast('ไม่พบข้อมูลผู้ใช้งาน กรุณาเข้าสู่ระบบใหม่', 'warning')
+    return
+  }
 
   logging.value = true
   try {
@@ -527,7 +534,7 @@ async function logActionForRow(rowId, action) {
     if (error) throw error
     await fetchStatuses()
   } catch (err) {
-    alert('บันทึกสถานะไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'))
+    ui.showToast('บันทึกสถานะไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'), 'error')
   } finally {
     logging.value = false
   }
@@ -536,7 +543,10 @@ async function logActionForRow(rowId, action) {
 async function logActionForRows(rowIds, action) {
   const ids = Array.from(new Set((rowIds || []).filter((x) => x != null)))
   if (!ids.length) return
-  if (!auth.user?.id) return alert('ไม่พบข้อมูลผู้ใช้งาน กรุณาเข้าสู่ระบบใหม่')
+  if (!auth.user?.id) {
+    ui.showToast('ไม่พบข้อมูลผู้ใช้งาน กรุณาเข้าสู่ระบบใหม่', 'warning')
+    return
+  }
 
   const picked = (rows.value || []).filter((r) => ids.includes(r.id))
   if (!picked.length) return
@@ -558,7 +568,7 @@ async function logActionForRows(rowIds, action) {
     if (error) throw error
     await fetchStatuses()
   } catch (err) {
-    alert('บันทึกสถานะไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'))
+    ui.showToast('บันทึกสถานะไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'), 'error')
   } finally {
     logging.value = false
   }
@@ -572,9 +582,9 @@ async function copyMessage() {
     if (selectedRowIds.value.length > 0) {
       await logActionForRows(selectedRowIds.value, 'line_copy_ap_request')
     }
-    alert('คัดลอกข้อความแล้ว')
+    ui.showToast('คัดลอกข้อความแล้ว', 'success')
   } catch (err) {
-    alert('คัดลอกไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'))
+    ui.showToast('คัดลอกไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'), 'error')
   }
 }
 
@@ -585,9 +595,9 @@ async function copyRow(r) {
   try {
     await navigator.clipboard.writeText(text)
     await logActionForRow(r.id, 'line_copy_ap_request')
-    alert('คัดลอกข้อความแล้ว')
+    ui.showToast('คัดลอกข้อความแล้ว', 'success')
   } catch (err) {
-    alert('คัดลอกไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'))
+    ui.showToast('คัดลอกไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'), 'error')
   }
 }
 
@@ -602,10 +612,10 @@ async function markReadRow(r) {
     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
       <div>
         <h1 class="text-[20px] font-semibold" style="color: var(--color-text-primary)">ส่งข้อความ LINE</h1>
-        <p class="text-[13px] mt-0.5" style="color: var(--color-text-muted)">
-          <span v-if="viewMode === 'slip'">แสดงรายการ AP Status: จ่ายครบ และ รอชำระ</span>
-          <span v-else>แสดงเฉพาะรายการ AP Status: รอชำระ</span>
-        </p>
+        <div class="text-[12px] font-normal px-2 mt-1" style="color: var(--color-text-muted)">
+          <span v-if="viewMode === 'slip'">แสดงรายการ AP Status: ชำระแล้ว และ ยังไม่ชำระ</span>
+          <span v-else>แสดงเฉพาะรายการ AP Status: ยังไม่ชำระ</span>
+        </div>
         <div class="mt-2 flex items-center gap-2">
           <span class="text-[12px] font-medium" style="color: var(--color-text-muted)">ประเภทรายการ:</span>
           <button
@@ -615,7 +625,7 @@ async function markReadRow(r) {
             :style="viewMode === 'pay' ? { borderColor: '#2563eb' } : { borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }"
             @click="viewMode = 'pay'; selectedRowIds = []; messageDirty = false; editableText = ''; fetchRows()"
           >
-            แจ้งขอชำระเงิน ({{ countsLoading ? '-' : statusCounts.pay }})
+            ยังไม่ชำระ ({{ countsLoading ? '-' : statusCounts.pay }})
           </button>
           <button
             type="button"
@@ -624,7 +634,7 @@ async function markReadRow(r) {
             :style="viewMode === 'slip' ? { borderColor: '#2563eb' } : { borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }"
             @click="viewMode = 'slip'; selectedRowIds = []; messageDirty = false; editableText = ''; fetchRows()"
           >
-            ยืนยันรับสลิป ({{ countsLoading ? '-' : (statusCounts.paid + statusCounts.pay) }})
+            ชำระแล้ว ({{ countsLoading ? '-' : (statusCounts.paid + statusCounts.pay) }})
           </button>
         </div>
       </div>
@@ -694,10 +704,10 @@ async function markReadRow(r) {
                         <span
                           class="ml-1 px-2 py-0.5 rounded-full text-[11px] font-medium border"
                           :style="{
-                            borderColor: 'var(--color-border)',
-                            color: r.ap_status === 'จ่ายครบ' ? '#16a34a' : '#f97316',
-                            background: r.ap_status === 'จ่ายครบ' ? 'rgba(34, 197, 94, 0.10)' : 'rgba(249, 115, 22, 0.10)',
-                          }"
+                              borderColor: 'var(--color-border)',
+                              color: r.ap_status === 'ชำระแล้ว' ? '#16a34a' : '#ef4444',
+                              background: r.ap_status === 'ชำระแล้ว' ? 'rgba(34, 197, 94, 0.10)' : 'rgba(239, 68, 68, 0.10)',
+                            }"
                         >
                           {{ r.ap_status || '-' }}
                         </span>

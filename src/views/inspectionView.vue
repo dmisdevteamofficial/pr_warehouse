@@ -159,7 +159,7 @@ async function fetchData() {
     orders.value = ordersData || []
     transactions.value = txData || []
   } catch (err) {
-    alert('โหลดประวัติการเบิกไม่สำเร็จ: ' + err.message)
+    ui.showToast('โหลดประวัติการเบิกไม่สำเร็จ: ' + err.message, 'error')
   } finally {
     loading.value = false
   }

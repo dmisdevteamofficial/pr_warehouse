@@ -72,11 +72,8 @@ function getStatusStyle(status) {
   if (s.includes('ชำระแล้ว') || s.includes('paid') || s.includes('complete') || s.includes('อนุมัติ')) {
     return { bg: 'rgba(16,185,129,0.12)', color: '#047857', border: 'rgba(16,185,129,0.25)' }
   }
-  if (s.includes('ยังไม่') || s.includes('unpaid') || s.includes('ค้าง')) {
+  if (s.includes('ยังไม่') || s.includes('unpaid') || s.includes('ค้าง') || s.includes('partial') || s.includes('บางส่วน')) {
     return { bg: 'rgba(239,68,68,0.12)', color: '#b91c1c', border: 'rgba(239,68,68,0.25)' }
-  }
-  if (s.includes('partial') || s.includes('บางส่วน')) {
-    return { bg: 'rgba(59,130,246,0.12)', color: '#1d4ed8', border: 'rgba(59,130,246,0.25)' }
   }
   return { bg: 'rgba(148,163,184,0.12)', color: '#475569', border: 'rgba(148,163,184,0.25)' }
 }

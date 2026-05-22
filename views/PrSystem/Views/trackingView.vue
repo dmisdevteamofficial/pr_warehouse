@@ -211,7 +211,7 @@ function clearPoDateFilter() {
   onFilterChanged()
 }
 
-const apStatusOptions = ['รอชำระ', 'จ่ายบางส่วน', 'จ่ายครบ']
+const apStatusOptions = ['ยังไม่ชำระ', 'ชำระแล้ว']
 const urgentOptions = computed(() => {
   const set = new Set()
   for (const r of rows.value || []) {
@@ -274,16 +274,12 @@ const currencyTotals = computed(() => {
         <div class="text-[22px] font-semibold leading-7" style="color: var(--color-text-primary)">{{ totalRows }}</div>
       </div>
       <div class="rounded-xl border px-3 py-2.5" style="background: var(--color-bg-card); border-color: var(--color-border)">
-        <div class="text-[11px] font-medium" style="color: var(--color-text-muted)">รอชำระ</div>
-        <div class="text-[22px] font-semibold leading-7" style="color: #f97316">{{ filteredStatusCounts.get('รอชำระ') || 0 }}</div>
+        <div class="text-[11px] font-medium" style="color: var(--color-text-muted)">ยังไม่ชำระ</div>
+        <div class="text-[22px] font-semibold leading-7" style="color: #ef4444">{{ filteredStatusCounts.get('ยังไม่ชำระ') || 0 }}</div>
       </div>
       <div class="rounded-xl border px-3 py-2.5" style="background: var(--color-bg-card); border-color: var(--color-border)">
-        <div class="text-[11px] font-medium" style="color: var(--color-text-muted)">จ่ายบางส่วน</div>
-        <div class="text-[22px] font-semibold leading-7" style="color: #0ea5e9">{{ filteredStatusCounts.get('จ่ายบางส่วน') || 0 }}</div>
-      </div>
-      <div class="rounded-xl border px-3 py-2.5" style="background: var(--color-bg-card); border-color: var(--color-border)">
-        <div class="text-[11px] font-medium" style="color: var(--color-text-muted)">จ่ายครบ</div>
-        <div class="text-[22px] font-semibold leading-7" style="color: #16a34a">{{ filteredStatusCounts.get('จ่ายครบ') || 0 }}</div>
+        <div class="text-[11px] font-medium" style="color: var(--color-text-muted)">ชำระแล้ว</div>
+        <div class="text-[22px] font-semibold leading-7" style="color: #16a34a">{{ filteredStatusCounts.get('ชำระแล้ว') || 0 }}</div>
       </div>
     </div>
 

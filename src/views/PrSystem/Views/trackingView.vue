@@ -1,7 +1,9 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '@/lib/supabase'
+import { useUiStore } from '@/stores/ui'
 
+const ui = useUiStore()
 const emit = defineEmits(['editRow'])
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
@@ -59,6 +61,18 @@ function formatThaiDate(value) {
   const month = String(d.getMonth() + 1)
   const year = String(d.getFullYear())
   return `${day}/${month}/${year}`
+}
+
+function formatThaiDateTime(value) {
+  if (!value) return '-'
+  const d = new Date(value)
+  if (Number.isNaN(+d)) return '-'
+  const day = String(d.getDate())
+  const month = String(d.getMonth() + 1)
+  const year = String(d.getFullYear())
+  const hours = String(d.getHours()).padStart(2, '0')
+  const minutes = String(d.getMinutes()).padStart(2, '0')
+  return `${day}/${month}/${year} ${hours}:${minutes}`
 }
 
 function formatNumber(value) {
@@ -122,7 +136,7 @@ async function fetchRows() {
     if (error) throw error
     rows.value = data || []
   } catch (err) {
-    alert('โหลดข้อมูลตารางติดตามไม่สำเร็จ: ' + getErrorText(err))
+    ui.showToast('โหลดข้อมูลตารางติดตามไม่สำเร็จ: ' + getErrorText(err), 'error')
     rows.value = []
   } finally {
     loading.value = false
@@ -190,7 +204,7 @@ function goNext() {
 }
 
 function isPaidComplete(status) {
-  return String(status || '').trim() === 'จ่ายครบ'
+  return String(status || '').trim() === 'ชำระแล้ว'
 }
 
 function onEditRow(r) {
@@ -211,7 +225,7 @@ function clearPoDateFilter() {
   onFilterChanged()
 }
 
-const apStatusOptions = ['รอชำระ', 'จ่ายบางส่วน', 'จ่ายครบ']
+const apStatusOptions = ['ยังไม่ชำระ', 'ชำระแล้ว']
 const urgentOptions = computed(() => {
   const set = new Set()
   for (const r of rows.value || []) {
@@ -274,16 +288,12 @@ const currencyTotals = computed(() => {
         <div class="text-[22px] font-semibold leading-7" style="color: var(--color-text-primary)">{{ totalRows }}</div>
       </div>
       <div class="rounded-xl border px-3 py-2.5" style="background: var(--color-bg-card); border-color: var(--color-border)">
-        <div class="text-[11px] font-medium" style="color: var(--color-text-muted)">รอชำระ</div>
-        <div class="text-[22px] font-semibold leading-7" style="color: #f97316">{{ filteredStatusCounts.get('รอชำระ') || 0 }}</div>
+        <div class="text-[11px] font-medium" style="color: var(--color-text-muted)">ยังไม่ชำระ</div>
+        <div class="text-[22px] font-semibold leading-7" style="color: #ef4444">{{ filteredStatusCounts.get('ยังไม่ชำระ') || 0 }}</div>
       </div>
       <div class="rounded-xl border px-3 py-2.5" style="background: var(--color-bg-card); border-color: var(--color-border)">
-        <div class="text-[11px] font-medium" style="color: var(--color-text-muted)">จ่ายบางส่วน</div>
-        <div class="text-[22px] font-semibold leading-7" style="color: #0ea5e9">{{ filteredStatusCounts.get('จ่ายบางส่วน') || 0 }}</div>
-      </div>
-      <div class="rounded-xl border px-3 py-2.5" style="background: var(--color-bg-card); border-color: var(--color-border)">
-        <div class="text-[11px] font-medium" style="color: var(--color-text-muted)">จ่ายครบ</div>
-        <div class="text-[22px] font-semibold leading-7" style="color: #16a34a">{{ filteredStatusCounts.get('จ่ายครบ') || 0 }}</div>
+        <div class="text-[11px] font-medium" style="color: var(--color-text-muted)">ชำระแล้ว</div>
+        <div class="text-[22px] font-semibold leading-7" style="color: #16a34a">{{ filteredStatusCounts.get('ชำระแล้ว') || 0 }}</div>
       </div>
     </div>
 
@@ -456,6 +466,7 @@ const currencyTotals = computed(() => {
               <th class="px-4 py-3 text-left font-medium whitespace-nowrap" style="color: var(--color-text-muted)">ต้องการ</th>
               <th class="px-4 py-3 text-left font-medium whitespace-nowrap" style="color: var(--color-text-muted)">หมายเหตุ</th>
               <th class="px-4 py-3 text-left font-medium whitespace-nowrap" style="color: var(--color-text-muted)">คนเปิด PO</th>
+              <th class="px-4 py-3 text-left font-medium whitespace-nowrap" style="color: var(--color-text-muted)">ผู้เพิ่ม/วันที่เวลา</th>
               <th class="px-3 py-2 text-left font-medium" style="color: var(--color-text-muted)">โอน (แผน)</th>
               <th class="px-3 py-2 text-center font-medium whitespace-nowrap" style="color: var(--color-text-muted)">สลิป</th>
               <th class="px-3 py-2 text-center font-medium whitespace-nowrap" style="color: var(--color-text-muted)">จัดการ</th>
@@ -491,7 +502,11 @@ const currencyTotals = computed(() => {
                 </span>
               </td>
               <td class="px-4 py-3 align-top whitespace-nowrap">
-                <span class="px-2 py-0.5 rounded-full text-[11px] font-medium border" style="border-color: rgba(37, 99, 235, 0.25); color: #2563eb">
+                <span class="px-3 py-1 rounded-full text-[11px] font-semibold border inline-block text-center w-full" :style="{
+                  backgroundColor: isPaidComplete(r.ap_status) ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+                  color: isPaidComplete(r.ap_status) ? '#16a34a' : '#ef4444',
+                  borderColor: isPaidComplete(r.ap_status) ? 'rgba(16, 185, 129, 0.25)' : 'rgba(239, 68, 68, 0.25)'
+                }">
                   {{ r.ap_status || '-' }}
                 </span>
               </td>
@@ -509,6 +524,10 @@ const currencyTotals = computed(() => {
               </td>
               <td class="px-4 py-3 align-top" style="color: var(--color-text-primary); white-space: normal; word-break: break-word">
                 {{ r.po_created_by || '-' }}
+              </td>
+              <td class="px-4 py-3 align-top whitespace-nowrap" style="color: var(--color-text-muted)">
+                <div class="font-medium" style="color: var(--color-text-primary)">{{ r.created_by || '-' }}</div>
+                <div class="text-[11px]">{{ formatThaiDateTime(r.created_at) }}</div>
               </td>
               <td class="px-4 py-3 align-top whitespace-nowrap" style="color: var(--color-text-muted)">{{ formatThaiDate(r.date_transfer) }}</td>
               <td class="px-3 py-3 align-top text-center">
@@ -542,10 +561,10 @@ const currencyTotals = computed(() => {
               </td>
             </tr>
             <tr v-if="loading">
-              <td colspan="15" class="px-4 py-10 text-center" style="color: var(--color-text-muted)">กำลังโหลดข้อมูล...</td>
+              <td colspan="16" class="px-4 py-10 text-center" style="color: var(--color-text-muted)">กำลังโหลดข้อมูล...</td>
             </tr>
             <tr v-else-if="!loading && totalRows === 0">
-              <td colspan="15" class="px-4 py-10 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูล</td>
+              <td colspan="16" class="px-4 py-10 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูล</td>
             </tr>
           </tbody>
         </table>

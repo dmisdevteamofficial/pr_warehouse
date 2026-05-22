@@ -3,9 +3,11 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 
 const router = useRouter()
 const auth = useAuthStore()
+const ui = useUiStore()
 
 const loading = ref(true)
 const saving = ref(false)
@@ -101,8 +103,9 @@ async function fetchData() {
 }
 
 async function saveNewCookie() {
-  if (!newCookieValue.value.trim()) {
-    alert('กรุณาใส่ cookie ใหม่')
+  const val = newCookieValue.value.trim()
+  if (!val) {
+    ui.showToast('กรุณาใส่ cookie ใหม่', 'warning')
     return
   }
 
@@ -116,7 +119,7 @@ async function saveNewCookie() {
     const { error } = await supabase
       .from('trcloud_session')
       .insert({
-        cookie_value: newCookieValue.value.trim(),
+        cookie_value: val,
         updated_by: auth.user.id,
         is_active: true
       })
@@ -124,10 +127,10 @@ async function saveNewCookie() {
     if (error) throw error
 
     newCookieValue.value = ''
-    alert('บันทึก cookie ใหม่สำเร็จ')
+    ui.showToast('บันทึก cookie ใหม่สำเร็จ', 'success')
     await fetchData()
   } catch (err) {
-    alert('บันทึกไม่สำเร็จ: ' + err.message)
+    ui.showToast('บันทึกไม่สำเร็จ: ' + err.message, 'error')
   } finally {
     saving.value = false
   }

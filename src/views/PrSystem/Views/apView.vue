@@ -227,10 +227,7 @@ function getTrcloudBadgeInfo(status) {
   if (s.includes('ชำระแล้ว') || s.includes('paid') || s.includes('complete') || s.includes('อนุมัติ')) {
     return { text: 'ชำระแล้ว', bg: 'rgba(16,185,129,0.1)', color: '#10b981', border: 'rgba(16,185,129,0.3)' }
   }
-  if (s.includes('ชำระบางส่วน') || s.includes('partial')) {
-    return { text: 'ชำระบางส่วน', bg: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: 'rgba(59,130,246,0.3)' }
-  }
-  if (s.includes('ยังไม่') || s.includes('ค้าง') || s.includes('unpaid') || s.includes('cancel')) {
+  if (s.includes('ชำระบางส่วน') || s.includes('partial') || s.includes('ยังไม่') || s.includes('ค้าง') || s.includes('unpaid') || s.includes('cancel')) {
     return { text: 'ยังไม่ชำระ', bg: 'rgba(239,68,68,0.1)', color: '#ef4444', border: 'rgba(239,68,68,0.3)' }
   }
   if (s.includes('รอ') || s.includes('pending') || s.includes('draft') || s.includes('ส่ง')) {

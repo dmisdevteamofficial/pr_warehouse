@@ -3,8 +3,10 @@ import { computed, onMounted, ref } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 
 const auth = useAuthStore()
+const ui = useUiStore()
 
 const orders = ref([])
 const transactions = ref([])
@@ -72,7 +74,7 @@ async function fetchData() {
     transactions.value = txData || []
   } catch (err) {
     console.error('Error fetching order request data:', err.message)
-    alert('ไม่สามารถโหลดข้อมูลคำขอเบิกสินค้าได้: ' + err.message)
+    ui.showToast('ไม่สามารถโหลดข้อมูลคำขอเบิกสินค้าได้: ' + err.message, 'error')
   } finally {
     loading.value = false
   }

@@ -1,6 +1,9 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { supabase } from '@/lib/supabase'
+import { useUiStore } from '@/stores/ui'
+
+const ui = useUiStore()
 
 const loading = ref(true)
 const logs = ref([])
@@ -48,7 +51,6 @@ async function fetchData() {
 
     if (error) throw error
     const list = rows || []
-    logs.value = list
 
     const userIds = [...new Set(list.map((r) => r.system_user_id).filter(Boolean))]
     const byId = {}
@@ -61,9 +63,10 @@ async function fetchData() {
         for (const u of users || []) byId[u.id] = u
       }
     }
+    logs.value = list
     systemUsersById.value = byId
   } catch (err) {
-    alert('โหลดข้อมูลล็อกอินไม่สำเร็จ: ' + err.message)
+    ui.showToast('โหลดข้อมูลล็อกอินไม่สำเร็จ: ' + err.message, 'error')
     logs.value = []
     systemUsersById.value = {}
   } finally {

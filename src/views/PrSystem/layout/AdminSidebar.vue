@@ -141,7 +141,7 @@ const closeMobile = () => {
         <div class="flex items-center gap-2">
           <div
             class="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0"
-            aria-label="ระบบ PR"
+            aria-label="ระบบติดตามงาน"
           >
             <i class="fa-solid fa-file-invoice text-white text-[16px]"></i>
           </div>
@@ -149,7 +149,7 @@ const closeMobile = () => {
             v-if="!collapsed"
             class="text-gray-900 dark:text-white font-semibold text-sm tracking-wide flex flex-col leading-4"
           >
-            <span>ระบบ PR</span>
+            <span>ระบบติดตามงาน</span>
             <span class="text-[10px] font-medium text-gray-500 dark:text-gray-400 flex items-center gap-1">
               <i class="fa-solid fa-receipt text-[10px]"></i>
               ใบสั่งซื้อ

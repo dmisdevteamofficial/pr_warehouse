@@ -1,7 +1,10 @@
 <script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 import { supabase } from '@/lib/supabase'
+
+const ui = useUiStore()
 
 // Company Logos
 import logoThaiDrill from '@/assets/thaidrill_company.png'
@@ -163,7 +166,7 @@ async function handleSubmit() {
     showSuccessModal.value = true
   } catch (err) {
     console.error('Error submitting order:', err.message)
-    alert('เกิดข้อผิดพลาด: ' + err.message)
+    ui.showToast('เกิดข้อผิดพลาด: ' + err.message, 'error')
   } finally {
     saving.value = false
   }

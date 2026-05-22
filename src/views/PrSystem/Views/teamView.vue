@@ -2,8 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 
 const auth = useAuthStore()
+const ui = useUiStore()
 
 const loading = ref(true)
 const saving = ref(false)
@@ -97,7 +99,7 @@ async function fetchTeams() {
       _creator: r.created_by ? creatorById[r.created_by] : null,
     }))
   } catch (err) {
-    alert('โหลดข้อมูลทีมจัดซื้อไม่สำเร็จ: ' + getErrorText(err))
+    ui.showToast('โหลดข้อมูลทีมจัดซื้อไม่สำเร็จ: ' + getErrorText(err), 'error')
     rows.value = []
   } finally {
     loading.value = false
@@ -135,7 +137,10 @@ function goNext() {
 }
 
 function openCreate() {
-  if (!auth.user?.id) return alert('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่')
+  if (!auth.user?.id) {
+    ui.showToast('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่', 'warning')
+    return
+  }
   modalMode.value = 'create'
   editingId.value = null
   form.value = { team_name: '' }
@@ -143,7 +148,10 @@ function openCreate() {
 }
 
 function openEdit(row) {
-  if (!auth.user?.id) return alert('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่')
+  if (!auth.user?.id) {
+    ui.showToast('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่', 'warning')
+    return
+  }
   modalMode.value = 'edit'
   editingId.value = row?.id ?? null
   form.value = { team_name: row?.team_name ?? '' }
@@ -155,9 +163,15 @@ function closeModal() {
 }
 
 async function submit() {
-  if (!auth.user?.id) return alert('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่')
+  if (!auth.user?.id) {
+    ui.showToast('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่', 'warning')
+    return
+  }
   const name = (form.value.team_name || '').trim()
-  if (!name) return alert('กรุณากรอกชื่อทีมจัดซื้อ')
+  if (!name) {
+    ui.showToast('กรุณากรอกชื่อทีมจัดซื้อ', 'warning')
+    return
+  }
 
   saving.value = true
   try {
@@ -168,7 +182,7 @@ async function submit() {
         .update({ team_name: name })
         .eq('id', editingId.value)
       if (error) throw error
-      alert('แก้ไขข้อมูลสำเร็จ')
+      ui.showToast('แก้ไขข้อมูลสำเร็จ', 'success')
     } else {
       const payload = {
         team_name: name,
@@ -176,13 +190,13 @@ async function submit() {
       }
       const { error } = await supabase.from('purchasing_team').insert(payload)
       if (error) throw error
-      alert('บันทึกข้อมูลสำเร็จ')
+      ui.showToast('บันทึกข้อมูลสำเร็จ', 'success')
     }
 
     closeModal()
     await fetchTeams()
   } catch (err) {
-    alert('บันทึกข้อมูลไม่สำเร็จ: ' + getErrorText(err))
+    ui.showToast('บันทึกข้อมูลไม่สำเร็จ: ' + getErrorText(err), 'error')
   } finally {
     saving.value = false
   }
@@ -194,9 +208,10 @@ async function removeRow(row) {
   try {
     const { error } = await supabase.from('purchasing_team').delete().eq('id', row.id)
     if (error) throw error
+    ui.showToast('ลบข้อมูลสำเร็จ', 'success')
     await fetchTeams()
   } catch (err) {
-    alert('ลบข้อมูลไม่สำเร็จ: ' + getErrorText(err))
+    ui.showToast('ลบข้อมูลไม่สำเร็จ: ' + getErrorText(err), 'error')
   }
 }
 </script>

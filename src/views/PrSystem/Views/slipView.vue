@@ -2,8 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 
 const auth = useAuthStore()
+const ui = useUiStore()
 
 const loading = ref(true)
 const rows = ref([])
@@ -34,13 +36,13 @@ async function fetchRows() {
     const { data, error } = await supabase
       .from('ap_requests')
       .select('id, ap_number, po_id, item_ref, total_price, currency_name, option_name, ap_status, updated_at')
-      .in('ap_status', ['รอชำระ', 'จ่ายบางส่วน'])
+      .eq('ap_status', 'ยังไม่ชำระ')
       .order('updated_at', { ascending: false })
 
     if (error) throw error
     rows.value = data || []
   } catch (err) {
-    alert('โหลดข้อมูลไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'))
+    ui.showToast('โหลดข้อมูลไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'), 'error')
     rows.value = []
   } finally {
     loading.value = false
@@ -75,7 +77,7 @@ const totalRows = computed(() => (filteredRows.value || []).length)
 async function markPaidComplete(row) {
   const id = row?.id
   if (!id) return
-  const ok = window.confirm('ยืนยันอัปเดตสถานะเป็น "จ่ายครบ" หรือไม่?')
+  const ok = window.confirm('ยืนยันอัปเดตสถานะเป็น "ชำระแล้ว" หรือไม่?')
   if (!ok) return
 
   try {
@@ -83,7 +85,7 @@ async function markPaidComplete(row) {
     const { error } = await supabase
       .from('ap_requests')
       .update({
-        ap_status: 'จ่ายครบ',
+        ap_status: 'ชำระแล้ว',
         updated_by: updatedBy,
         updated_at: new Date().toISOString(),
       })
@@ -91,8 +93,9 @@ async function markPaidComplete(row) {
 
     if (error) throw error
     rows.value = (rows.value || []).filter((r) => r?.id !== id)
+    ui.showToast('อัปเดตสถานะสำเร็จ', 'success')
   } catch (err) {
-    alert('อัปเดตไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'))
+    ui.showToast('อัปเดตไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'), 'error')
   }
 }
 </script>
@@ -103,7 +106,7 @@ async function markPaidComplete(row) {
       <div>
         <h1 class="text-[20px] font-semibold" style="color: var(--color-text-primary)">รายการสลิป</h1>
         <p class="text-[13px] mt-0.5" style="color: var(--color-text-muted)">
-          แสดงเฉพาะสถานะ AP: รอชำระ, จ่ายบางส่วน • ทั้งหมด {{ totalRows }} รายการ
+          แสดงเฉพาะสถานะ AP: ยังไม่ชำระ • ทั้งหมด {{ totalRows }} รายการ
         </p>
       </div>
       <button
@@ -168,7 +171,10 @@ async function markPaidComplete(row) {
                 </span>
               </td>
               <td class="px-4 py-3 align-top whitespace-nowrap">
-                <span class="px-2 py-0.5 rounded-full text-[11px] font-medium border" style="border-color: rgba(37, 99, 235, 0.25); color: #2563eb">
+                <span
+                  class="px-2 py-0.5 rounded-full text-[11px] font-medium border"
+                  style="background-color: rgba(239, 68, 68, 0.12); color: #ef4444; border-color: rgba(239, 68, 68, 0.25)"
+                >
                   {{ r.ap_status || '-' }}
                 </span>
               </td>
@@ -179,7 +185,7 @@ async function markPaidComplete(row) {
                   style="border-color: #16a34a; color: #16a34a"
                   @click="markPaidComplete(r)"
                 >
-                  จ่ายครบ
+                  ชำระแล้ว
                 </button>
               </td>
             </tr>

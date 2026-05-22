@@ -2,8 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 
 const auth = useAuthStore()
+const ui = useUiStore()
 
 const loading = ref(true)
 const rows = ref([])
@@ -252,7 +254,7 @@ async function fetchHistoryClosedPr() {
         }
       })
   } catch (err) {
-    alert('โหลดประวัติ PR ไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'))
+    ui.showToast('โหลดประวัติ PR ไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'), 'error')
     rows.value = []
   } finally {
     loading.value = false

@@ -713,7 +713,7 @@ async function renderCharts() {
         labels: currencyChart.value.labels,
         datasets: [
           {
-            label: 'รอชำระ/บางส่วน',
+            label: 'ยังไม่ชำระ',
             data: currencyChart.value.pending,
             backgroundColor: 'rgba(249, 115, 22, 0.75)',
           },
@@ -751,7 +751,7 @@ async function renderCharts() {
         labels: currencyChart.value.labels,
         datasets: [
           {
-            label: 'จ่ายครบ',
+            label: 'ชำระแล้ว',
             data: currencyChart.value.paid,
             backgroundColor: 'rgba(34, 197, 94, 0.75)',
           },
@@ -1134,13 +1134,13 @@ onUnmounted(() => {
         <div v-if="hasCurrencyData">
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div class="rounded-lg border p-3" style="border-color: var(--color-border)">
-              <div class="text-[12px] font-semibold mb-2" style="color: var(--color-text-secondary)">รอชำระ/บางส่วน</div>
+              <div class="text-[12px] font-semibold mb-2" style="color: var(--color-text-secondary)">ยังไม่ชำระ</div>
               <div class="h-[200px]">
                 <canvas ref="currencyPendingBarRef"></canvas>
               </div>
             </div>
             <div class="rounded-lg border p-3" style="border-color: var(--color-border)">
-              <div class="text-[12px] font-semibold mb-2" style="color: var(--color-text-secondary)">จ่ายครบ</div>
+              <div class="text-[12px] font-semibold mb-2" style="color: var(--color-text-secondary)">ชำระแล้ว</div>
               <div class="h-[200px]">
                 <canvas ref="currencyPaidBarRef"></canvas>
               </div>
@@ -1152,8 +1152,8 @@ onUnmounted(() => {
               <thead>
                 <tr style="border-bottom: 1px solid var(--color-border)">
                   <th class="text-left px-3 py-2 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">สกุลเงิน</th>
-                  <th class="text-right px-3 py-2 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">รอชำระ/บางส่วน</th>
-                  <th class="text-right px-3 py-2 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">จ่ายครบ</th>
+                  <th class="text-right px-3 py-2 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">ยังไม่ชำระ</th>
+                  <th class="text-right px-3 py-2 font-medium whitespace-nowrap" style="color: var(--color-text-muted)">ชำระแล้ว</th>
                 </tr>
               </thead>
               <tbody>

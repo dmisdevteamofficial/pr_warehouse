@@ -2,7 +2,10 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { supabase } from '@/lib/supabase'
+import { useUiStore } from '@/stores/ui'
 import logoThaiDrill from '@/assets/thaidrill_company.png'
+
+const ui = useUiStore()
 import logoThaiDrillLao from '@/assets/thaidrillLao_company.png'
 import logoTDL_MVDC from '@/assets/tdl&mvdc_company.jpg'
 import logoSunny from '@/assets/sunnycompany.png'
@@ -86,7 +89,7 @@ async function fetchData() {
     console.log('✅ โหลดข้อมูลสำเร็จ:', mergedData.length, 'orders')
   } catch (err) {
     console.error('❌ Error loading data:', err)
-    alert('โหลดประวัติการเบิกไม่สำเร็จ: ' + err.message)
+    ui.showToast('โหลดประวัติการเบิกไม่สำเร็จ: ' + err.message, 'error')
   } finally {
     loading.value = false
   }
@@ -481,7 +484,7 @@ async function processHistoryBarcodeInput(code) {
     }
     await renderHistoryPreviewBarcode(group.requestId)
   } catch (err) {
-    alert('ค้นหาใบบินไม่สำเร็จ: ' + err.message)
+    ui.showToast('ค้นหาใบบินไม่สำเร็จ: ' + err.message, 'error')
     closeHistoryBillPreview()
   } finally {
     historyBillPreviewLoading.value = false
@@ -513,7 +516,7 @@ async function downloadPdf(group) {
       .from(element)
       .save()
   } catch (err) {
-    alert('ดาวน์โหลด PDF ไม่สำเร็จ: ' + err.message)
+    ui.showToast('ดาวน์โหลด PDF ไม่สำเร็จ: ' + err.message, 'error')
   } finally {
     exportBill.value = null
     exportingGroupKey.value = ''

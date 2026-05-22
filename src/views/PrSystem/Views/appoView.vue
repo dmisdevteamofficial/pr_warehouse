@@ -3,9 +3,11 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { supabase, supabaseEmployee } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { useTrcloudStore } from '@/stores/trcloud'
+import { useUiStore } from '@/stores/ui'
 
 const auth = useAuthStore()
 const trcloudStore = useTrcloudStore()
+const ui = useUiStore()
 const emit = defineEmits(['edited', 'cancelEdit', 'selectPage'])
 const props = defineProps({
   editId: { type: [Number, String], default: null },
@@ -17,7 +19,10 @@ const editRowId = ref(null)
 const editLoading = ref(false)
 const urgentOptions = ref([])
 const departmentOptions = ref([])
-const apSearchText = ref('')
+const apSearchText = computed({
+  get: () => trcloudStore.appoApSearchTextState,
+  set: (val) => trcloudStore.appoApSearchTextState = val
+})
 const apSearching = ref(false)
 const apDropdownOpen = ref(false)
 const apNumberOptions = ref([])
@@ -29,7 +34,7 @@ const apInfo = ref(null)
 const expandedRowIds = ref([])
 const showAddedTable = ref(false)
 const addedTableRef = ref(null)
-const autofillQueue = ref([]) // คิวรายการที่รอ autofill
+const editingTmpId = ref(null) // ID ของรายการในตารางชั่วคราวที่กำลังแก้ไข
 
 async function fetchUrgentOptions() {
   try {
@@ -251,11 +256,17 @@ async function fetchApAutofill(apIdentity) {
       form.value.supplier_name = trcloudItem.organization || ''
       form.value.item_ref = trcloudItem.item_name || ''
       
-      const rawPrice = trcloudItem.item_total || trcloudItem.total || 0
+      const rawPrice = trcloudItem.item_total || trcloudItem.total || trcloudItem.price || 0
       form.value.total_price = !isNaN(parseFloat(rawPrice)) ? parseFloat(rawPrice) : null
       
       form.value.po_date = poDateIso
-      form.value.ap_status = trcloudItem.status || ''
+
+      // แมปสถานะจาก TRCloud ให้เป็นคำใหม่ตามต้องการ
+      const rawStatus = String(trcloudItem.status || '').trim()
+      if (rawStatus === 'รอชำระ') form.value.ap_status = 'ยังไม่ชำระ'
+      else if (rawStatus === 'จ่ายครบ') form.value.ap_status = 'ชำระแล้ว'
+      else form.value.ap_status = rawStatus
+
       form.value.currency_name = trcloudItem.currency || 'THB' 
 
       apInfo.value = {
@@ -264,6 +275,7 @@ async function fetchApAutofill(apIdentity) {
         supplier_name: trcloudItem.organization || '-',
         item_ref: trcloudItem.item_name || '-',
         qty_order: form.value.qty_order || '-',
+        total_price: form.value.total_price || '-',
         option_name: '-',
         department: form.value.department || '-',
         po_created_by: form.value.po_created_by || `TRCloud ${type || 'Data'}`,
@@ -343,26 +355,26 @@ function onApKeydown(e) {
   }
 }
 
-const form = ref({
-  ap_number: '',
-  po_id: '',
-  po_date: '',
-  supplier_name: '',
-  item_ref: '',
-  qty_order: null,
-  department: '',
-  po_created_by: '',
-  date_transfer: '',
-  option_name: '',
-  total_price: null,
-  currency_name: '',
-  ap_status: '',
-  qty_received: null,
-  desired_date: '',
-  remark: '',
+const form = computed({
+  get: () => trcloudStore.appoFormState,
+  set: (val) => trcloudStore.appoFormState = val
 })
 
-const rows = ref([])
+const rows = computed({
+  get: () => trcloudStore.appoRowsState,
+  set: (val) => trcloudStore.appoRowsState = val
+})
+
+const availableApStatuses = computed(() => {
+  if (!trcloudStore.apItemRows) return []
+  const raw = trcloudStore.apItemRows.map((r) => {
+    const s = String(r.status || '').trim()
+    if (s === 'รอชำระ') return 'ยังไม่ชำระ'
+    if (s === 'จ่ายครบ') return 'ชำระแล้ว'
+    return s
+  }).filter(s => s && s !== 'จ่ายบางส่วน')
+  return [...new Set(raw)].sort()
+})
 
 const qtyAutoPreview = computed(() => {
   const order = Number(form.value.qty_order ?? 0)
@@ -417,7 +429,10 @@ function resetForm(keepHeader = true) {
   apInfo.value = null
 }
 
-resetForm(false)
+// เริ่มต้นข้อมูลเฉพาะเมื่อไม่มีข้อมูลใน Store เท่านั้น
+if (!form.value.ap_number && !form.value.po_id && rows.value.length === 0) {
+  resetForm(false)
+}
 
 onMounted(() => {
   fetchUrgentOptions()
@@ -448,14 +463,36 @@ async function handleAutofill(val) {
   const list = Array.isArray(val) ? val : [val]
   if (list.length === 0) return
 
-  // เก็บรายการทั้งหมดเข้าคิว
-  autofillQueue.value = [...list]
-  
-  // ดึงรายการแรกมาแสดงในฟอร์ม
-  const firstItem = autofillQueue.value.shift()
-  if (firstItem) {
-    await selectApOption(firstItem)
+  // วนลูปเพิ่มทุกรายการเข้าตารางทันที
+  for (const identity of list) {
+    await fetchApAutofill(identity)
+    
+    const payload = {
+      ap_number: (form.value.ap_number || '').trim() || null,
+      po_id: (form.value.po_id || '').trim() || null,
+      po_date: form.value.po_date || null,
+      supplier_name: (form.value.supplier_name || '').trim() || null,
+      item_ref: (form.value.item_ref || '').trim() || null,
+      qty_order: form.value.qty_order === null || form.value.qty_order === '' ? null : Number(form.value.qty_order),
+      department: (form.value.department || '').trim() || null,
+      po_created_by: (form.value.po_created_by || '').trim() || null,
+      date_transfer: form.value.date_transfer || null,
+      option_name: (form.value.option_name || '').trim() || null,
+      total_price: form.value.total_price === null || form.value.total_price === '' ? null : Number(form.value.total_price),
+      currency_name: (form.value.currency_name || '').trim() || null,
+      ap_status: (form.value.ap_status || '').trim() || null,
+      qty_received: form.value.qty_received === null || form.value.qty_received === '' ? null : Number(form.value.qty_received),
+      desired_date: form.value.desired_date || null,
+      remark: (form.value.remark || '').trim() || null,
+      _qty_auto_preview: qtyAutoPreview.value,
+    }
+    rows.value = [{ _tmp_id: crypto.randomUUID(), ...payload }, ...(rows.value || [])]
   }
+
+  resetForm(false)
+  showAddedTable.value = true
+  await nextTick()
+  scrollToAddedTable()
 }
 
 function formatNumber(value) {
@@ -472,7 +509,10 @@ async function addRow() {
     po_date: form.value.po_date || null,
     supplier_name: (form.value.supplier_name || '').trim() || null,
   }
-  if (!base.ap_number && !base.po_id) return alert('กรุณากรอก เลขที่ AP หรือ เลขที่ PO ก่อน')
+  if (!base.ap_number && !base.po_id) {
+    ui.showToast('กรุณากรอก เลขที่ AP หรือ เลขที่ PO ก่อน', 'warning')
+    return
+  }
 
   const payload = {
     ...base,
@@ -491,21 +531,80 @@ async function addRow() {
     _qty_auto_preview: qtyAutoPreview.value,
   }
 
-  rows.value = [{ _tmp_id: crypto.randomUUID(), ...payload }, ...(rows.value || [])]
-  
-  // ตรวจสอบคิว autofill
-  if (autofillQueue.value.length > 0) {
-    const nextItem = autofillQueue.value.shift()
-    if (nextItem) {
-      await selectApOption(nextItem)
+  if (editingTmpId.value) {
+    // แก้ไขรายการเดิม
+    const index = rows.value.findIndex(r => r._tmp_id === editingTmpId.value)
+    if (index !== -1) {
+      rows.value[index] = { ...rows.value[index], ...payload }
     }
+    editingTmpId.value = null
   } else {
-    resetForm(false)
+    // เพิ่มรายการใหม่
+    rows.value = [{ _tmp_id: crypto.randomUUID(), ...payload }, ...(rows.value || [])]
   }
-  
+
+  resetForm(false)
   showAddedTable.value = true
   await nextTick()
   scrollToAddedTable()
+}
+
+function editTmpRow(row) {
+  editingTmpId.value = row._tmp_id
+  form.value = {
+    ap_number: row.ap_number || '',
+    po_id: row.po_id || '',
+    po_date: row.po_date || '',
+    supplier_name: row.supplier_name || '',
+    item_ref: row.item_ref || '',
+    qty_order: row.qty_order ?? null,
+    department: row.department || '',
+    po_created_by: row.po_created_by || '',
+    date_transfer: row.date_transfer || '',
+    option_name: row.option_name || '',
+    total_price: row.total_price ?? null,
+    currency_name: row.currency_name || '',
+    ap_status: row.ap_status || '',
+    qty_received: row.qty_received ?? null,
+    desired_date: row.desired_date || '',
+    remark: row.remark || '',
+  }
+  apSearchText.value = form.value.ap_number
+  // เลื่อนไปที่ฟอร์มด้านบน
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function cancelTmpEdit() {
+  editingTmpId.value = null
+  resetForm(false)
+}
+
+function bulkUpdateCurrency(newCurrency) {
+  if (!newCurrency) return
+  if (!rows.value || rows.value.length === 0) return
+  
+  // อัปเดตทุกรายการในตารางชั่วคราว
+  rows.value = rows.value.map(r => ({
+    ...r,
+    currency_name: newCurrency
+  }))
+  
+  // อัปเดตในฟอร์มด้วยเพื่อให้ตรงกัน
+  form.value.currency_name = newCurrency
+}
+
+function bulkUpdateUrgency(newUrgency) {
+  if (!newUrgency) return
+  if (!rows.value || rows.value.length === 0) return
+  
+  // อัปเดตทุกรายการในตารางชั่วคราว
+  rows.value = rows.value.map(r => ({
+    ...r,
+    option_name: newUrgency
+  }))
+  
+  // อัปเดตในฟอร์มด้วยเพื่อให้ตรงกัน
+  form.value.option_name = newUrgency
 }
 
 function clearRows() {
@@ -566,7 +665,7 @@ async function startEdit(id) {
   } catch (err) {
     editMode.value = false
     editRowId.value = null
-    alert('โหลดข้อมูลสำหรับแก้ไขไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'))
+    ui.showToast('โหลดข้อมูลสำหรับแก้ไขไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'), 'error')
   } finally {
     editLoading.value = false
   }
@@ -604,10 +703,10 @@ async function submitEdit() {
     editMode.value = false
     editRowId.value = null
     resetForm(false)
-    alert('บันทึกการแก้ไขสำเร็จ')
+    ui.showToast('บันทึกการแก้ไขสำเร็จ', 'success')
     emit('edited')
   } catch (err) {
-    alert('บันทึกการแก้ไขไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'))
+    ui.showToast('บันทึกการแก้ไขไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'), 'error')
   } finally {
     saving.value = false
   }
@@ -621,7 +720,10 @@ function cancelEdit() {
 }
 
 async function submitAll() {
-  if (!(rows.value || []).length) return alert('ยังไม่มีรายการในตาราง กรุณากด "เพิ่มรายการ" ก่อน')
+  if (!(rows.value || []).length) {
+    ui.showToast('ยังไม่มีรายการในตาราง กรุณากด "เพิ่มรายการ" ก่อน', 'warning')
+    return
+  }
   saving.value = true
   try {
     const createdBy = createdByText()
@@ -654,9 +756,9 @@ async function submitAll() {
 
     rows.value = []
     resetForm(false)
-    alert('บันทึกข้อมูลสำเร็จ')
+    ui.showToast('บันทึกข้อมูลสำเร็จ', 'success')
   } catch (err) {
-    alert('บันทึกข้อมูลไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'))
+    ui.showToast('บันทึกข้อมูลไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'), 'error')
   } finally {
     saving.value = false
   }
@@ -695,20 +797,16 @@ watch(
               >
                 แก้ไขข้อมูล
               </span>
+              <span
+                v-else-if="editingTmpId"
+                class="px-2 py-0.5 rounded-full text-[11px] font-medium border"
+                style="border-color: rgba(139, 92, 246, 0.35); color: #8b5cf6"
+              >
+                กำลังแก้ไขรายการในตาราง
+              </span>
               <span v-if="editLoading" class="text-[12px] font-normal" style="color: var(--color-text-muted)">กำลังโหลด...</span>
             </h1>
             <p class="text-[13px] mt-0.5" style="color: var(--color-text-muted)">บันทึกข้อมูลจากตาราง ap_requests</p>
-          </div>
-          
-          <!-- Queue Indicator -->
-          <div v-if="autofillQueue.length > 0" class="flex items-center gap-3 px-4 py-2 rounded-xl border bg-blue-50/50 border-blue-200 animate-pulse">
-            <div class="flex flex-col items-end">
-              <span class="text-[11px] font-medium text-blue-600 uppercase tracking-wider">กำลังรอดำเนินการ</span>
-              <span class="text-[13px] font-bold text-blue-700">เหลืออีก {{ autofillQueue.length }} รายการ</span>
-            </div>
-            <div class="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white">
-              <i class="fa-solid fa-layer-group text-[14px]"></i>
-            </div>
           </div>
         </div>
       </div>
@@ -899,9 +997,9 @@ watch(
                   style="border-color: var(--color-border); background: var(--color-bg-card); color: var(--color-text-primary)"
                 >
                   <option value="">— เลือก —</option>
-                  <option value="รอชำระ">รอชำระ</option>
-                  <option value="จ่ายบางส่วน">จ่ายบางส่วน</option>
-                  <option value="จ่ายครบ">จ่ายครบ</option>
+                  <option v-for="status in availableApStatuses" :key="status" :value="status">
+                    {{ status }}
+                  </option>
                 </select>
               </div>
               <div>
@@ -974,6 +1072,26 @@ watch(
               กลับไปตารางติดตาม
             </button>
           </div>
+          <div v-else-if="editingTmpId" class="w-full flex flex-col md:flex-row md:items-center gap-2">
+            <button
+              type="button"
+              class="px-4 py-2 rounded-md border text-[13px] font-medium inline-flex items-center gap-2"
+              style="border-color: #8b5cf6; color: #7c3aed; background: var(--color-bg-card)"
+              @click="addRow"
+            >
+              <i class="fa-solid fa-check"></i>
+              อัปเดตรายการ
+            </button>
+            <button
+              type="button"
+              class="px-4 py-2 rounded-md border text-[13px] font-medium inline-flex items-center gap-2"
+              style="border-color: var(--color-border); color: var(--color-text-secondary); background: var(--color-bg-card)"
+              @click="cancelTmpEdit"
+            >
+              <i class="fa-solid fa-xmark"></i>
+              ยกเลิกการแก้ไข
+            </button>
+          </div>
           <button
             v-else
             type="button"
@@ -1013,14 +1131,48 @@ watch(
       <div ref="addedTableRef" class="mt-4 rounded-lg border overflow-hidden" style="border-color: var(--color-border); background: var(--color-bg-card)">
         <button
           type="button"
-          class="w-full px-4 py-2 border-b text-[13px] font-medium flex items-center gap-2"
+          class="w-full px-4 py-2 border-b text-[13px] font-medium flex flex-col md:flex-row md:items-center gap-2"
           style="border-color: var(--color-border); color: var(--color-text-primary)"
-          @click="showAddedTable = !showAddedTable"
         >
-          <i class="fa-solid fa-list" style="color: var(--color-text-muted)"></i>
-          <span>รายการที่เพิ่ม</span>
-          <span class="text-[12px] font-normal" style="color: var(--color-text-muted)">({{ (rows || []).length }} รายการ)</span>
-          <i class="fa-solid fa-chevron-down ml-auto transition-transform duration-200" :class="showAddedTable ? 'rotate-180' : ''" style="color: var(--color-text-muted)"></i>
+          <div class="flex items-center gap-2 flex-1" @click="showAddedTable = !showAddedTable">
+            <i class="fa-solid fa-list" style="color: var(--color-text-muted)"></i>
+            <span>รายการที่เพิ่ม</span>
+            <span class="text-[12px] font-normal" style="color: var(--color-text-muted)">({{ (rows || []).length }} รายการ)</span>
+            <i class="fa-solid fa-chevron-down ml-auto transition-transform duration-200" :class="showAddedTable ? 'rotate-180' : ''" style="color: var(--color-text-muted)"></i>
+          </div>
+
+          <!-- Bulk Selectors -->
+          <div v-if="rows.length > 0" class="flex flex-wrap items-center gap-4 ml-auto" @click.stop>
+            <!-- Bulk Urgency -->
+            <div class="flex items-center gap-2">
+              <span class="text-[11px] font-normal" style="color: var(--color-text-muted)">เปลี่ยนความเร่งด่วนทั้งหมด:</span>
+              <select
+                :value="form.option_name"
+                class="px-2 py-1 border rounded text-[11px] focus:outline-none"
+                style="border-color: var(--color-border); background: var(--color-bg-body); color: var(--color-text-primary)"
+                @change="bulkUpdateUrgency($event.target.value)"
+              >
+                <option value="">— เลือก —</option>
+                <option v-for="opt in urgentOptions" :key="opt" :value="opt">{{ opt }}</option>
+              </select>
+            </div>
+
+            <!-- Bulk Currency -->
+            <div class="flex items-center gap-2">
+              <span class="text-[11px] font-normal" style="color: var(--color-text-muted)">เปลี่ยนสกุลเงินทั้งหมด:</span>
+              <select
+                :value="form.currency_name"
+                class="px-2 py-1 border rounded text-[11px] focus:outline-none"
+                style="border-color: var(--color-border); background: var(--color-bg-body); color: var(--color-text-primary)"
+                @change="bulkUpdateCurrency($event.target.value)"
+              >
+                <option value="">— เลือก —</option>
+                <option value="THB">THB</option>
+                <option value="LAK">LAK</option>
+                <option value="USD">USD</option>
+              </select>
+            </div>
+          </div>
         </button>
         <div v-if="showAddedTable" class="overflow-x-auto">
           <table class="w-full text-[12px] min-w-[1500px] border-collapse" style="border: 1px solid var(--color-border)">
@@ -1088,6 +1240,14 @@ watch(
                 </td>
                 <td class="px-3 py-2 whitespace-nowrap" style="color: var(--color-text-primary)">
                   <div class="flex items-center gap-1">
+                    <button
+                      type="button"
+                      class="w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/10 transition-colors text-blue-600 dark:text-blue-300"
+                      title="แก้ไขแถวนี้"
+                      @click="editTmpRow(r)"
+                    >
+                      <i class="fa-solid fa-pen-to-square"></i>
+                    </button>
                     <button
                       type="button"
                       class="w-9 h-9 inline-flex items-center justify-center rounded-lg hover:bg-red-50 dark:hover:bg-red-900/10 transition-colors text-red-600 dark:text-red-300"

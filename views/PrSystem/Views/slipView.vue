@@ -34,7 +34,7 @@ async function fetchRows() {
     const { data, error } = await supabase
       .from('ap_requests')
       .select('id, ap_number, po_id, item_ref, total_price, currency_name, option_name, ap_status, updated_at')
-      .in('ap_status', ['รอชำระ', 'จ่ายบางส่วน'])
+      .eq('ap_status', 'ยังไม่ชำระ')
       .order('updated_at', { ascending: false })
 
     if (error) throw error
@@ -103,7 +103,7 @@ async function markPaidComplete(row) {
       <div>
         <h1 class="text-[20px] font-semibold" style="color: var(--color-text-primary)">รายการสลิป</h1>
         <p class="text-[13px] mt-0.5" style="color: var(--color-text-muted)">
-          แสดงเฉพาะสถานะ AP: รอชำระ, จ่ายบางส่วน • ทั้งหมด {{ totalRows }} รายการ
+          แสดงเฉพาะสถานะ AP: ยังไม่ชำระ • ทั้งหมด {{ totalRows }} รายการ
         </p>
       </div>
       <button

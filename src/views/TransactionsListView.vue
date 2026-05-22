@@ -179,7 +179,7 @@ async function processBarcodeInput(code) {
       shouldRenderBarcode = true
     }
   } catch (err) {
-    alert('เกิดข้อผิดพลาดในการค้นหา: ' + err.message)
+    ui.showToast('เกิดข้อผิดพลาดในการค้นหา: ' + err.message, 'error')
     closeBillPreview()
   } finally {
     scanLoading.value = false
@@ -435,11 +435,17 @@ async function submitBillPreviewWithdraw() {
 }
 
 async function submitGroupWithdraw({ closeScanModal, closeBillPreviewModal }) {
-  if (!auth.user?.id) return alert('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่')
+  if (!auth.user?.id) {
+    ui.showToast('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่', 'warning')
+    return
+  }
 
   const items = scanResult.value?.items || []
   const withdrawableItems = items.filter((o) => canWithdrawScan(o))
-  if (withdrawableItems.length === 0) return alert('ไม่มีรายการที่สามารถดำเนินการได้')
+  if (withdrawableItems.length === 0) {
+    ui.showToast('ไม่มีรายการที่สามารถดำเนินการได้', 'warning')
+    return
+  }
 
   const insufficient = withdrawableItems.some((order) => {
     const form = scanItemForms.value?.[order.id]
@@ -522,9 +528,9 @@ async function submitGroupWithdraw({ closeScanModal, closeBillPreviewModal }) {
     ui.showToast(`ดำเนินการเรียบร้อยแล้ว`, 'success')
   } catch (err) {
     if ((err.message || '').includes('stock_insufficient')) {
-      alert('สต็อกสินค้าไม่พอสำหรับการเบิกตามจำนวนที่ระบุ')
+      ui.showToast('สต็อกสินค้าไม่พอสำหรับการเบิกตามจำนวนที่ระบุ', 'error')
     } else {
-      alert('บันทึกไม่สำเร็จ: ' + err.message)
+      ui.showToast('บันทึกไม่สำเร็จ: ' + err.message, 'error')
     }
   } finally {
     saving.value = false
@@ -575,7 +581,7 @@ async function fetchData() {
     systemUsers.value = usersData || []
     transactions.value = txData || []
   } catch (err) {
-    alert('โหลดข้อมูลไม่สำเร็จ: ' + err.message)
+    ui.showToast('โหลดข้อมูลไม่สำเร็จ: ' + err.message, 'error')
   } finally {
     loading.value = false
   }
@@ -761,10 +767,22 @@ function openWithdrawModal(order) {
 }
 
 async function submitWithdraw() {
-  if (!auth.user?.id) return alert('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่')
-  if (!withdrawForm.value.item_id || !withdrawForm.value.order_id) return alert('ไม่พบข้อมูลคำขอ')
-  if (!withdrawForm.value.amount || withdrawForm.value.amount <= 0) return alert('จำนวนที่เบิกต้องมากกว่า 0')
-  if (withdrawForm.value.amount > withdrawForm.value.max_amount) return alert('จำนวนที่เบิกมากกว่าจำนวนที่ขอ')
+  if (!auth.user?.id) {
+    ui.showToast('ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่', 'warning')
+    return
+  }
+  if (!withdrawForm.value.item_id || !withdrawForm.value.order_id) {
+    ui.showToast('ไม่พบข้อมูลคำขอ', 'warning')
+    return
+  }
+  if (!withdrawForm.value.amount || withdrawForm.value.amount <= 0) {
+    ui.showToast('จำนวนที่เบิกต้องมากกว่า 0', 'warning')
+    return
+  }
+  if (withdrawForm.value.amount > withdrawForm.value.max_amount) {
+    ui.showToast('จำนวนที่เบิกมากกว่าจำนวนที่ขอ', 'warning')
+    return
+  }
 
   saving.value = true
   try {
@@ -815,12 +833,12 @@ async function submitWithdraw() {
 
     isWithdrawModalOpen.value = false
     await fetchData()
-    alert('บันทึกการเบิกสำเร็จ')
+    ui.showToast('บันทึกการเบิกสำเร็จ', 'success')
   } catch (err) {
     if ((err.message || '').includes('stock_insufficient')) {
-      alert('สต็อกสินค้าไม่พอสำหรับการเบิกตามจำนวนที่ระบุ')
+      ui.showToast('สต็อกสินค้าไม่พอสำหรับการเบิกตามจำนวนที่ระบุ', 'error')
     } else {
-      alert('บันทึกการเบิกไม่สำเร็จ: ' + err.message)
+      ui.showToast('บันทึกการเบิกไม่สำเร็จ: ' + err.message, 'error')
     }
   } finally {
     saving.value = false

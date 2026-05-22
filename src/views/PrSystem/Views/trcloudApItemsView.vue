@@ -149,9 +149,18 @@ function toggleTracked(row, checked) {
   }
 }
 
+function mapStatus(status) {
+  const s = String(status || '').trim()
+  if (s === 'รอชำระ') return 'ยังไม่ชำระ'
+  if (s === 'จ่ายครบ') return 'ชำระแล้ว'
+  return s
+}
+
 const availableStatuses = computed(() => {
   if (!trcloudStore.apItemRows) return []
-  return [...new Set(trcloudStore.apItemRows.map((r) => r.status).filter(Boolean))].sort()
+  const rawStatuses = trcloudStore.apItemRows.map((r) => r.status).filter(Boolean)
+  const mapped = rawStatuses.map(s => mapStatus(s)).filter(s => s !== 'จ่ายบางส่วน')
+  return [...new Set(mapped)].sort()
 })
 
 const filteredRows = computed(() => {
@@ -258,9 +267,9 @@ function toggleSelectRow(row) {
   const isCurrentlySelected = isSelected(row)
 
   if (isCurrentlySelected) {
-    // ถ้าเลือกอยู่แล้ว ให้เอาออกทั้งหมดที่มี doc_number เดียวกัน
-    const sameDocIds = new Set(sameDocRows.map(r => getRowIdentity(r)))
-    selectedRows.value = selectedRows.value.filter(r => !sameDocIds.has(getRowIdentity(r)))
+    // เอาออกเฉพาะรายการที่คลิก เพื่อให้สามารถยกเลิกบางรายการในกลุ่มได้
+    const currentId = getRowIdentity(row)
+    selectedRows.value = selectedRows.value.filter(r => getRowIdentity(r) !== currentId)
   } else {
     // ถ้ายังไม่ได้เลือก ให้เพิ่มทั้งหมดที่ยังไม่ได้อยู่ใน selectedRows
     const currentSelectedIds = new Set(selectedRows.value.map(r => getRowIdentity(r)))
@@ -507,11 +516,11 @@ onMounted(() => {
               </td>
               <td class="px-4 py-3">
                 <span class="px-3 py-1 rounded-full text-[11px] font-semibold border inline-block text-center w-full" :style="{
-                  backgroundColor: row.status?.toString().toLowerCase().includes('ยังไม่') || row.status?.toString().toLowerCase().includes('unpaid') ? 'rgba(239,68,68,0.12)' : 'rgba(16,185,129,0.12)',
-                  color: row.status?.toString().toLowerCase().includes('ยังไม่') || row.status?.toString().toLowerCase().includes('unpaid') ? '#b91c1c' : '#047857',
-                  borderColor: row.status?.toString().toLowerCase().includes('ยังไม่') || row.status?.toString().toLowerCase().includes('unpaid') ? 'rgba(239,68,68,0.25)' : 'rgba(16,185,129,0.25)'
+                  backgroundColor: row.status?.toString().toLowerCase().includes('ยังไม่') || row.status?.toString().toLowerCase().includes('unpaid') || row.status === 'รอชำระ' ? 'rgba(239,68,68,0.12)' : 'rgba(16,185,129,0.12)',
+                  color: row.status?.toString().toLowerCase().includes('ยังไม่') || row.status?.toString().toLowerCase().includes('unpaid') || row.status === 'รอชำระ' ? '#ef4444' : '#16a34a',
+                  borderColor: row.status?.toString().toLowerCase().includes('ยังไม่') || row.status?.toString().toLowerCase().includes('unpaid') || row.status === 'รอชำระ' ? 'rgba(239,68,68,0.25)' : 'rgba(16,185,129,0.25)'
                 }">
-                  {{ row.status || '-' }}
+                  {{ mapStatus(row.status) }}
                 </span>
               </td>
             </tr>

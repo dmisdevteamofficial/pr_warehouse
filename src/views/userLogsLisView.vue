@@ -2,6 +2,9 @@
 import { computed, onMounted, ref } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { supabase } from '@/lib/supabase'
+import { useUiStore } from '@/stores/ui'
+
+const ui = useUiStore()
 
 const loading = ref(true)
 const logs = ref([])
@@ -64,7 +67,7 @@ async function fetchData() {
     }
     systemUsersById.value = byId
   } catch (err) {
-    alert('โหลดข้อมูลล็อกอินไม่สำเร็จ: ' + err.message)
+    ui.showToast('โหลดข้อมูลล็อกอินไม่สำเร็จ: ' + err.message, 'error')
     logs.value = []
     systemUsersById.value = {}
   } finally {

@@ -6,6 +6,9 @@ import { ref, onMounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
+
+const ui = useUiStore()
 
 // Company Logos
 import logoThaiDrill from '@/assets/thaidrill_company.png'
@@ -272,8 +275,11 @@ function closeModal() {
 // ─── Document Viewer ──────────────────────────────────────────────────────────
 function openDocument() {
   const url = modalOrder.value?.document_url || modalOrder.value?.image_url
-  if (url) window.open(url, '_blank')
-  else alert('ไม่มีเอกสารแนบ')
+if (url) {
+    window.open(url, '_blank')
+  } else {
+    ui.showToast('ไม่มีเอกสารแนบ', 'warning')
+  }
 }
 
 // ─── Print / Download ─────────────────────────────────────────────────────────

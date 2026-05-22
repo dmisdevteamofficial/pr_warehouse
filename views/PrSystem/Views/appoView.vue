@@ -861,9 +861,8 @@ watch(
                   style="border-color: var(--color-border); background: var(--color-bg-card); color: var(--color-text-primary)"
                 >
                   <option value="">— เลือก —</option>
-                  <option value="รอชำระ">รอชำระ</option>
-                  <option value="จ่ายบางส่วน">จ่ายบางส่วน</option>
-                  <option value="จ่ายครบ">จ่ายครบ</option>
+                  <option value="ยังไม่ชำระ">ยังไม่ชำระ</option>
+                  <option value="ชำระแล้ว">ชำระแล้ว</option>
                 </select>
               </div>
               <div>
