@@ -24,6 +24,48 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref(initialUser)
   const isLoggedIn = computed(() => !!user.value)
   const initials = computed(() => user.value?.fullname?.slice(0, 2).toUpperCase() || 'US')
+  
+  // Profile Image reactive state
+  const profileImage = ref(user.value?.profile_img || user.value?.avatar_url || localStorage.getItem(`profile_img_${user.value?.id}`) || null)
+
+  async function updateProfileImage(imgData) {
+    if (user.value) {
+      // 1. Update reactive state
+      profileImage.value = imgData
+      
+      // 2. Fallback to localStorage
+      if (imgData) {
+        localStorage.setItem(`profile_img_${user.value.id}`, imgData)
+      } else {
+        localStorage.removeItem(`profile_img_${user.value.id}`)
+      }
+
+      // 3. Try to update database
+      try {
+        // We'll try to update both possible column names
+        const { error } = await supabase
+          .from('system_users')
+          .update({ 
+            profile_img: imgData,
+            updated_at: new Date().toISOString() 
+          })
+          .eq('id', user.value.id)
+        
+        if (error) {
+          // If profile_img fails, try avatar_url
+          await supabase
+            .from('system_users')
+            .update({ 
+              avatar_url: imgData,
+              updated_at: new Date().toISOString() 
+            })
+            .eq('id', user.value.id)
+        }
+      } catch (err) {
+        console.warn('DB profile image update failed, using local fallback:', err.message)
+      }
+    }
+  }
 
   async function login(username, password) {
     try {
@@ -50,6 +92,10 @@ export const useAuthStore = defineStore('auth', () => {
       user.value = safeUser
       localStorage.setItem('mwm_session', JSON.stringify(safeUser))
 
+      // 3.1 Update profile image immediately after login
+      // Try to get from database first, fallback to localStorage
+      profileImage.value = safeUser.profile_img || safeUser.avatar_url || localStorage.getItem(`profile_img_${safeUser.id}`) || null
+
       // 4. Log the action in user_logs
       const ip = await getPublicIp()
       await supabase.from('user_logs').insert({
@@ -69,9 +115,10 @@ export const useAuthStore = defineStore('auth', () => {
 
   function logout() {
     user.value = null
+    profileImage.value = null
     localStorage.removeItem('mwm_session')
     router.push('/')
   }
 
-  return { user, isLoggedIn, initials, login, logout }
+  return { user, isLoggedIn, initials, profileImage, updateProfileImage, login, logout }
 })

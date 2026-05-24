@@ -182,7 +182,7 @@ function getDocMonth(row) {
     <!-- Table -->
     <div class="rounded-xl border overflow-hidden" style="background: var(--color-bg-card); border-color: var(--color-border)">
       <div class="overflow-x-auto">
-        <table class="w-full text-[13px] min-w-[980px] border-collapse">
+        <table class="w-full text-[13px] min-w-[1100px] border-collapse">
           <thead>
             <tr style="background: var(--color-bg-body); border-bottom: 1px solid var(--color-border)">
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">เลขที่เอกสาร</th>
@@ -193,12 +193,13 @@ function getDocMonth(row) {
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิง</th>
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">โครงการ</th>
               <th class="px-4 py-3 text-right font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">มูลค่า</th>
+              <th class="px-4 py-3 text-right font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ยอดที่ชำระ</th>
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted)">สถานะ</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="trcloudLoading">
-              <td colspan="9" class="px-4 py-12 text-center">
+              <td colspan="10" class="px-4 py-12 text-center">
                 <div class="flex flex-col items-center gap-2">
                   <i class="fa-solid fa-circle-notch fa-spin text-2xl text-blue-500"></i>
                   <span style="color: var(--color-text-muted)">กำลังดึงข้อมูลจาก TRCLOUD...</span>
@@ -206,7 +207,7 @@ function getDocMonth(row) {
               </td>
             </tr>
             <tr v-else-if="!filteredTrcloudRows.length">
-              <td colspan="9" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูล PV จาก TRCLOUD</td>
+              <td colspan="10" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบข้อมูล PV จาก TRCLOUD</td>
             </tr>
             <tr v-for="r in filteredTrcloudRows" :key="r.payment_id || r.id" class="dark:hover:bg-gray-200/50 hover:bg-blue-100/50 transition-colors border-bottom" style="border-bottom: 1px solid var(--color-border)">
               <td class="px-4 py-3 font-medium font-mono" style="color: #10b981; border-right: 1px solid var(--color-border)">{{ (r.company_format || '') + (r.document_number || r.payment_id || '-') }}</td>
@@ -217,6 +218,7 @@ function getDocMonth(row) {
               <td class="px-4 py-3 font-mono" style="color: #94a3b8; border-right: 1px solid var(--color-border)">{{ r.reference || '-' }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.project || '-' }}</td>
               <td class="px-4 py-3 text-right font-mono" style="color: #f59e0b; border-right: 1px solid var(--color-border)">{{ Number(r.grand_total || 0).toLocaleString('th-TH', {minimumFractionDigits:2, maximumFractionDigits:2}) }}</td>
+              <td class="px-4 py-3 text-right font-mono" style="color: #10b981; border-right: 1px solid var(--color-border)">{{ Number(r.payment || 0).toLocaleString('th-TH', {minimumFractionDigits:2, maximumFractionDigits:2}) }}</td>
               <td class="px-4 py-3">
                 <span class="px-3 py-1 rounded-full text-[11px] font-semibold border" :style="{ backgroundColor: getTrcloudBadgeInfo(r.status).bg, color: getTrcloudBadgeInfo(r.status).color, borderColor: getTrcloudBadgeInfo(r.status).border }">
                   {{ getTrcloudBadgeInfo(r.status).text }}

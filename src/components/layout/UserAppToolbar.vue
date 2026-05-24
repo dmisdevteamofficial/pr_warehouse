@@ -1,12 +1,12 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import Swal from 'sweetalert2'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
 import { supabase } from '@/lib/supabase'
 import ProfileDropdown from '@/components/ui/ProfileDropdown.vue'
 import NotificationDropdown from '@/components/ui/NotificationDropdown.vue'
-import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import ProfileEditSidebar from '@/components/layout/ProfileEditSidebar.vue'
 
 // 1. Core Stores & Refs
@@ -16,23 +16,17 @@ const route = useRoute()
 const router = useRouter()
 const isDark = ref(false)
 const isMenuOpen = ref(false)
-const showConfirmLogout = ref(false)
 const showEditProfile = ref(false)
-const profileImg = ref('')
 
 // 2. Computed Properties
-const fullname = computed(() => auth.user?.fullname || '-')
+const fullname = computed(() => auth.user?.fullname || 'ผู้ใช้งาน')
 const empCode = computed(() => auth.user?.emp_code || '')
 const currentPath = computed(() => route.path)
 
 // 3. Methods
 function closeMenu() { isMenuOpen.value = false }
 
-function loadProfileImage() {
-  if (auth.user) {
-    profileImg.value = localStorage.getItem(`profile_img_${auth.user.id}`) || ''
-  }
-}
+
 
 function toggleTheme() {
   isDark.value = !isDark.value
@@ -40,20 +34,29 @@ function toggleTheme() {
   localStorage.setItem('mwm_theme', isDark.value ? 'dark' : 'light')
 }
 
-function handleLogout() {
+async function handleLogout() {
   isMenuOpen.value = false
-  showConfirmLogout.value = true
-}
+  const result = await Swal.fire({
+    title: 'ออกจากระบบ',
+    text: 'คุณต้องการออกจากระบบใช่หรือไม่?',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonColor: '#3085d6',
+    cancelButtonColor: '#d33',
+    confirmButtonText: 'ใช่, ออกจากระบบ',
+    cancelButtonText: 'ยกเลิก',
+    background: document.documentElement.classList.contains('dark') ? '#1e293b' : '#fff',
+    color: document.documentElement.classList.contains('dark') ? '#fff' : '#000'
+  })
 
-function confirmLogout() {
-  showConfirmLogout.value = false
-  auth.logout()
+  if (result.isConfirmed) {
+    auth.logout()
+  }
 }
 
 // 4. Lifecycle Hooks
 onMounted(() => {
   isDark.value = document.documentElement.classList.contains('dark')
-  loadProfileImage()
 })
 </script>
 
@@ -137,7 +140,7 @@ onMounted(() => {
         <div class="px-5 py-6 border-b flex flex-col items-center" style="border-color: var(--color-border)">
           <div class="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-indigo-500 p-1 mb-3">
             <div class="w-full h-full rounded-full bg-white dark:bg-slate-800 flex items-center justify-center overflow-hidden">
-              <img v-if="profileImg" :src="profileImg" class="w-full h-full object-cover" />
+              <img v-if="auth.profileImage" :src="auth.profileImage" class="w-full h-full object-cover" />
               <span v-else class="text-2xl font-bold bg-gradient-to-br from-blue-500 to-indigo-500 bg-clip-text text-transparent">
                 {{ fullname.charAt(0) }}
               </span>
@@ -240,23 +243,10 @@ onMounted(() => {
     </div>
   </transition>
 
-  <!-- Logout Confirmation -->
-  <ConfirmDialog 
-    :show="showConfirmLogout"
-    title="ออกจากระบบ"
-    message="คุณต้องการออกจากระบบจริงๆใช่หรือไม่?"
-    confirmText="ใช่ และ ออก"
-    cancelText="ยกเลิก"
-    type="danger"
-    @confirm="confirmLogout"
-    @cancel="showConfirmLogout = false"
-  />
-
   <!-- Edit Profile Sidebar -->
   <ProfileEditSidebar 
     :show="showEditProfile"
     @close="showEditProfile = false"
-    @updated="loadProfileImage"
   />
 </template>
 

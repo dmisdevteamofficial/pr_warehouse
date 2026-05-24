@@ -1,28 +1,15 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
+import Swal from 'sweetalert2'
 import { useAuthStore } from '@/stores/auth'
-import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import ProfileEditSidebar from '@/components/layout/ProfileEditSidebar.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
 const isOpen = ref(false)
-const showConfirmLogout = ref(false)
 const showEditProfile = ref(false)
-const profileImg = ref('')
 const switchOpen = ref(false)
-
-// Load profile image from localStorage
-function loadProfileImage() {
-  if (auth.user) {
-    profileImg.value = localStorage.getItem(`profile_img_${auth.user.id}`) || ''
-  }
-}
-
-onMounted(() => {
-  loadProfileImage()
-})
 
 const fullname = computed(() => auth.user?.fullname || '-')
 const empCode = computed(() => auth.user?.emp_code || '')
@@ -33,19 +20,28 @@ const department = computed(() => auth.user?.department || '-')
 function toggleDropdown() {
   isOpen.value = !isOpen.value
   if (isOpen.value) {
-    loadProfileImage()
     switchOpen.value = false
   }
 }
 
-function handleLogout() {
+async function handleLogout() {
   isOpen.value = false
-  showConfirmLogout.value = true
-}
+  const result = await Swal.fire({
+    title: 'ออกจากระบบ',
+    text: 'คุณต้องการออกจากระบบใช่หรือไม่?',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonColor: '#3085d6',
+    cancelButtonColor: '#d33',
+    confirmButtonText: 'ใช่, ออกจากระบบ',
+    cancelButtonText: 'ยกเลิก',
+    background: document.documentElement.classList.contains('dark') ? '#1e293b' : '#fff',
+    color: document.documentElement.classList.contains('dark') ? '#fff' : '#000'
+  })
 
-function confirmLogout() {
-  showConfirmLogout.value = false
-  auth.logout()
+  if (result.isConfirmed) {
+    auth.logout()
+  }
 }
 
 function openEditProfile() {
@@ -65,7 +61,7 @@ function goToPrSystem() {
 }
 
 function onProfileUpdated() {
-  loadProfileImage()
+  // auth store already handles reactivity
 }
 </script>
 
@@ -76,7 +72,7 @@ function onProfileUpdated() {
             class="hidden sm:flex items-center gap-2 px-2 md:px-3 py-1.5 rounded-full border transition-all hover:shadow-md"
             style="border-color: var(--color-border); background: var(--color-bg-card)">
       <div class="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-indigo-500 text-white grid place-items-center text-[12px] font-bold overflow-hidden">
-        <img v-if="profileImg" :src="profileImg" class="w-full h-full object-cover" />
+        <img v-if="auth.profileImage" :src="auth.profileImage" class="w-full h-full object-cover" />
         <span v-else>{{ fullname.charAt(0) }}</span>
       </div>
       <div class="hidden sm:block text-left leading-4">
@@ -98,7 +94,7 @@ function onProfileUpdated() {
         <div class="px-5 py-6 text-center">
           <div class="mx-auto w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-indigo-500 p-1 mb-3">
             <div class="w-full h-full rounded-full bg-white dark:bg-slate-800 flex items-center justify-center overflow-hidden">
-              <img v-if="profileImg" :src="profileImg" class="w-full h-full object-cover" />
+              <img v-if="auth.profileImage" :src="auth.profileImage" class="w-full h-full object-cover" />
               <span v-else class="text-2xl font-bold bg-gradient-to-br from-blue-500 to-indigo-500 bg-clip-text text-transparent">
                 {{ fullname.charAt(0) }}
               </span>
@@ -178,18 +174,6 @@ function onProfileUpdated() {
     <!-- Backdrop for Dropdown -->
     <div v-if="isOpen" class="fixed inset-0 z-40" @click="isOpen = false" />
   </div>
-
-  <!-- Logout Confirmation -->
-  <ConfirmDialog 
-    :show="showConfirmLogout"
-    title="ออกจากระบบ"
-    message="คุณต้องการออกจากระบบใช่หรือไม่?"
-    confirmText="ใช่, ออกจากระบบ"
-    cancelText="ยกเลิก"
-    type="danger"
-    @confirm="confirmLogout"
-    @cancel="showConfirmLogout = false"
-  />
 
   <!-- Edit Profile Sidebar -->
   <ProfileEditSidebar 

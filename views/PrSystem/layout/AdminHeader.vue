@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue"
 import { useRouter } from "vue-router"
 import ProfileEditSidebar from "@/components/layout/ProfileEditSidebar.vue"
 import { useTrcloudStore } from "@/stores/trcloud"
+import { useAuthStore } from "@/stores/auth"
 
 const emit = defineEmits(["logout", "edit-profile", "toggle-sidebar"])
 
@@ -21,6 +22,7 @@ const props = defineProps({
 
 const router = useRouter()
 const trcloudStore = useTrcloudStore()
+const auth = useAuthStore()
 
 const menuOpen = ref(false)
 const profileRef = ref(null)
@@ -516,12 +518,13 @@ onBeforeUnmount(() => {
       <div ref="profileRef" class="relative">
         <button
           type="button"
-          class="flex items-center justify-center w-9 h-9 rounded-full bg-gray-100 text-gray-600 hover:text-gray-900 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:text-white dark:hover:bg-gray-700 transition"
+          class="flex items-center justify-center w-9 h-9 rounded-full overflow-hidden bg-gray-100 text-gray-600 hover:text-gray-900 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:text-white dark:hover:bg-gray-700 transition"
           @click="toggleMenu"
           aria-haspopup="menu"
           :aria-expanded="menuOpen"
         >
-          <i class="fa-solid fa-circle-user text-[24px]"></i>
+          <img v-if="auth.profileImage" :src="auth.profileImage" class="w-full h-full object-cover" />
+          <i v-else class="fa-solid fa-circle-user text-[24px]"></i>
         </button>
 
         <div
@@ -531,8 +534,9 @@ onBeforeUnmount(() => {
         >
           <div class="px-5 py-6 text-center">
             <div class="mx-auto w-20 h-20 rounded-full bg-blue-600/10 p-1 mb-3">
-              <div class="w-full h-full rounded-full bg-white dark:bg-gray-900 flex items-center justify-center">
-                <span class="text-2xl font-bold text-blue-600">
+              <div class="w-full h-full rounded-full bg-white dark:bg-gray-900 overflow-hidden flex items-center justify-center">
+                <img v-if="auth.profileImage" :src="auth.profileImage" class="w-full h-full object-cover" />
+                <span v-else class="text-2xl font-bold text-blue-600">
                   {{ (props.user.fullName || '-').charAt(0) }}
                 </span>
               </div>

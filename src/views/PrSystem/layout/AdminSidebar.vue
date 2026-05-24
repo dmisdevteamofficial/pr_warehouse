@@ -2,6 +2,7 @@
 import { ref, watch } from "vue"
 import AdminMenuItem from "../components/AdminMenuItem.vue"
 import AdminMenuGroup from "../components/AdminMenuGroup.vue"
+import { useAuthStore } from "@/stores/auth"
 
 const emit = defineEmits(["select", "close"])
 
@@ -10,6 +11,7 @@ const props = defineProps({
   activeItemId: { type: String, default: "/#/dashboard" },
 })
 
+const auth = useAuthStore()
 const collapsed = ref(false)
 const systemAdminsOpen = ref(false)
 const prListOpen = ref(false)
@@ -236,8 +238,31 @@ const closeMobile = () => {
       </AdminMenuGroup>
     </div>
 
+    <!-- User Profile Footer -->
+    <div class="mt-auto px-2 pb-2">
+      <div 
+        class="flex items-center gap-3 p-2 rounded-xl bg-gray-50 dark:bg-gray-900/50 border border-gray-100 dark:border-gray-800 transition-all duration-300"
+        :class="collapsed ? 'justify-center' : ''"
+      >
+        <div class="w-8 h-8 rounded-full bg-blue-600 flex-shrink-0 overflow-hidden flex items-center justify-center">
+          <img v-if="auth.profileImage" :src="auth.profileImage" class="w-full h-full object-cover" />
+          <span v-else class="text-[12px] font-bold text-white">
+            {{ (auth.user?.fullname || 'U').charAt(0) }}
+          </span>
+        </div>
+        <div v-if="!collapsed" class="flex flex-col min-w-0">
+          <span class="text-[12px] font-semibold text-gray-900 dark:text-white truncate">
+            {{ auth.user?.fullname || 'ผู้ใช้งาน' }}
+          </span>
+          <span class="text-[10px] text-gray-500 dark:text-gray-400 truncate">
+            {{ auth.user?.position || auth.user?.role || '-' }}
+          </span>
+        </div>
+      </div>
+    </div>
+
     <div
-      class="border-t border-gray-200 dark:border-gray-800 pt-3 px-3 text-xs text-center text-gray-500 dark:text-gray-400"
+      class="border-t border-gray-200 dark:border-gray-800 pt-3 px-3 text-[10px] text-center text-gray-500 dark:text-gray-400"
     >
       <span v-if="!collapsed">พัฒนาโดย DMIS</span>
     </div>

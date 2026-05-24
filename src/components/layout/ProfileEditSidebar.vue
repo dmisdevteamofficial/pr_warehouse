@@ -38,8 +38,8 @@ function initForm() {
   if (auth.user) {
     formData.value.fullname = auth.user.fullname || ''
     formData.value.username = auth.user.username || ''
-    // Get profile image from localStorage
-    formData.value.profileImage = localStorage.getItem(`profile_img_${auth.user.id}`) || ''
+    // Get profile image from auth store
+    formData.value.profileImage = auth.profileImage || ''
   }
   // Reset states
   showPasswordFields.value = false
@@ -70,18 +70,18 @@ function handleImageUpload(e) {
   }
 
   const reader = new FileReader()
-  reader.onload = (event) => {
+  reader.onload = async (event) => {
     formData.value.profileImage = event.target.result
-    localStorage.setItem(`profile_img_${auth.user.id}`, event.target.result)
+    await auth.updateProfileImage(event.target.result)
     showImageMenu.value = false
   }
   reader.readAsDataURL(file)
 }
 
 // Handle image delete
-function deleteProfileImage() {
+async function deleteProfileImage() {
   formData.value.profileImage = ''
-  localStorage.removeItem(`profile_img_${auth.user.id}`)
+  await auth.updateProfileImage(null)
   showImageMenu.value = false
   ui.showToast('ลบรูปภาพโปรไฟล์เรียบร้อยแล้ว', 'success')
 }

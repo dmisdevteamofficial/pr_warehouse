@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from "vue"
+import Swal from "sweetalert2"
 import { useAuthStore } from "@/stores/auth"
 import { useTrcloudStore } from "@/stores/trcloud"
 import AdminSidebar from "./layout/AdminSidebar.vue"
@@ -159,10 +160,23 @@ watch(
   { deep: true }
 )
 
-const onLogout = () => {
-  const ok = window.confirm("ต้องการออกจากระบบหรือไม่?")
-  if (!ok) return
-  auth.logout()
+const onLogout = async () => {
+  const result = await Swal.fire({
+    title: 'ออกจากระบบ',
+    text: 'คุณต้องการออกจากระบบใช่หรือไม่?',
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonColor: '#3085d6',
+    cancelButtonColor: '#d33',
+    confirmButtonText: 'ใช่, ออกจากระบบ',
+    cancelButtonText: 'ยกเลิก',
+    background: document.documentElement.classList.contains('dark') ? '#1e293b' : '#fff',
+    color: document.documentElement.classList.contains('dark') ? '#fff' : '#000'
+  })
+
+  if (result.isConfirmed) {
+    auth.logout()
+  }
 }
 </script>
 
