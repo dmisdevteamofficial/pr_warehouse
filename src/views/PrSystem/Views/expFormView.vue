@@ -4,6 +4,7 @@ import { supabase, supabaseEmployee } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { useTrcloudStore } from '@/stores/trcloud'
 import { useUiStore } from '@/stores/ui'
+import Swal from 'sweetalert2'
 
 const auth = useAuthStore()
 const trcloudStore = useTrcloudStore()
@@ -99,7 +100,7 @@ async function fetchApNumberOptions() {
     // Combine items from AP, PO, and PR
     const allItems = [
       ...(trcloudStore.apItemRows || []).map(r => ({ doc: r.doc_number || r.invoice_number, item: r.item_name, type: 'AP' })),
-      ...(trcloudStore.poItemRows || []).map(r => ({ doc: r.doc_number || r.invoice_number, item: r.item_name, type: 'PO' })),
+      ...(trcloudStore.poItemRows || []).map(r => ({ doc: r.expense || r.doc_number || r.invoice_number, item: r.item_name, type: 'PO' })),
       ...(trcloudStore.prItemRows || []).map(r => ({ doc: r.doc_number || r.invoice_number, item: r.item_name, type: 'PR' }))
     ]
 
@@ -199,7 +200,7 @@ async function fetchApAutofill(apIdentity) {
     let trcloudItem = null
     
     const searchInAp = () => trcloudStore.apItemRows.find(r => (r.doc_number === docNum || r.invoice_number === docNum) && r.item_name === itemName)
-    const searchInPo = () => trcloudStore.poItemRows.find(r => (r.doc_number === docNum || r.invoice_number === docNum) && r.item_name === itemName)
+    const searchInPo = () => trcloudStore.poItemRows.find(r => (r.expense === docNum || r.doc_number === docNum || r.invoice_number === docNum) && r.item_name === itemName)
     const searchInPr = () => trcloudStore.prItemRows.find(r => (r.doc_number === docNum || r.invoice_number === docNum) && r.item_name === itemName)
 
     if (type === 'AP') trcloudItem = searchInAp()
@@ -439,11 +440,48 @@ watch(() => trcloudStore.pendingAutofill, (val) => {
   }
 })
 
+async function isDuplicateInDb(item, excludeId = null) {
+  try {
+    let query = supabase
+      .from('exp_requests')
+      .select('id')
+    
+    // เงื่อนไข: เลขที่ AP (Exp)
+    if (item.ap_number) query = query.eq('ap_number', item.ap_number)
+    else query = query.is('ap_number', null)
+
+    // เงื่อนไข: เลขที่ PO
+    if (item.po_id) query = query.eq('po_id', item.po_id)
+    else query = query.is('po_id', null)
+
+    // เงื่อนไข: วันที่เปิด PO
+    if (item.po_date) query = query.eq('po_date', item.po_date)
+    else query = query.is('po_date', null)
+
+    // เงื่อนไข: รายการ / อะไหล่
+    if (item.item_ref) query = query.eq('item_ref', item.item_ref)
+    else query = query.is('item_ref', null)
+
+    // ถ้าเป็นการแก้ไข ให้ยกเว้น ID ของตัวเอง
+    if (excludeId) {
+      query = query.neq('id', excludeId)
+    }
+
+    const { data, error } = await query.maybeSingle()
+    if (error) throw error
+    return !!data
+  } catch (err) {
+    console.error('Duplicate check error:', err)
+    return false
+  }
+}
+
 async function handleAutofill(val) {
   const list = Array.isArray(val) ? val : [val]
   if (list.length === 0) return
 
   ui.showToast(`กำลังโหลดข้อมูล ${list.length} รายการ...`, 'info')
+  
   for (const identity of list) {
     await fetchApAutofill(identity)
     if (apInfo.value) {
@@ -451,22 +489,27 @@ async function handleAutofill(val) {
         ap_number: (form.value.ap_number || '').trim() || null,
         po_id: (form.value.po_id || '').trim() || null,
         po_date: form.value.po_date || null,
-        supplier_name: (form.value.supplier_name || '').trim() || null,
         item_ref: (form.value.item_ref || '').trim() || null,
+        // fields for UI/Other data
+        supplier_name: (form.value.supplier_name || '').trim() || null,
         qty_order: form.value.qty_order === null || form.value.qty_order === '' ? null : Number(form.value.qty_order),
         department: (form.value.department || '').trim() || null,
         po_created_by: (form.value.po_created_by || '').trim() || null,
         date_transfer: form.value.date_transfer || null,
-        option_name: (form.value.option_name || '').trim() || null,
+        option_name: '', 
         total_price: form.value.total_price === null || form.value.total_price === '' ? null : Number(form.value.total_price),
         currency_name: (form.value.currency_name || '').trim() || 'LAK',
-        ap_status: 'ยังไม่ชำระ', // Default to unpaid when pulling from PO
-        option_name: '', // Set to empty string
+        ap_status: 'ยังไม่ชำระ',
         qty_received: form.value.qty_received === null || form.value.qty_received === '' ? null : Number(form.value.qty_received),
         desired_date: form.value.desired_date || null,
         remark: (form.value.remark || '').trim() || null,
         _qty_auto_preview: qtyAutoPreview.value,
       }
+
+      // ตรวจสอบซ้ำใน DB เพื่อแสดงสีแดง
+      const exists = await isDuplicateInDb(payload)
+      payload._is_duplicate = exists
+
       rows.value = [{ _tmp_id: crypto.randomUUID(), ...payload }, ...(rows.value || [])]
     }
   }
@@ -508,11 +551,19 @@ async function addRow() {
     total_price: form.value.total_price === null || form.value.total_price === '' ? null : Number(form.value.total_price),
     currency_name: (form.value.currency_name || '').trim() || 'LAK',
     ap_status: (form.value.ap_status || '').trim() || 'ยังไม่ชำระ', // Default to unpaid when adding
-    option_name: (form.value.option_name || '').trim() || '', // Initial to empty
     qty_received: form.value.qty_received === null || form.value.qty_received === '' ? null : Number(form.value.qty_received),
     desired_date: form.value.desired_date || null,
     remark: (form.value.remark || '').trim() || null,
     _qty_auto_preview: qtyAutoPreview.value,
+  }
+
+  // ตรวจสอบซ้ำใน DB เพื่อแสดงสีแดง
+  saving.value = true
+  try {
+    const exists = await isDuplicateInDb(payload)
+    payload._is_duplicate = exists
+  } finally {
+    saving.value = false
   }
 
   if (editingTmpId.value) {
@@ -680,6 +731,20 @@ async function submitEdit() {
       updated_at: new Date().toISOString(),
     }
 
+    // ตรวจสอบซ้ำใน DB (ยกเว้นตัวเอง)
+    const exists = await isDuplicateInDb(payload, editRowId.value)
+    if (exists) {
+      await Swal.fire({
+        title: 'พบข้อมูลซ้ำในระบบ',
+        text: 'ไม่สามารถบันทึกได้ เนื่องจากมีข้อมูลรายการนี้ในระบบแล้ว (เลขที่ AP, เลขที่ PO, วันที่ และรายการ ซ้ำ)',
+        icon: 'warning',
+        confirmButtonText: 'ตกลง',
+        confirmButtonColor: '#3085d6',
+      })
+      saving.value = false
+      return
+    }
+
     const { error } = await supabase.from('exp_requests').update(payload).eq('id', editRowId.value)
     if (error) throw error
 
@@ -709,6 +774,28 @@ async function submitAll() {
   }
   saving.value = true
   try {
+    const duplicates = []
+    
+    // 1. ตรวจสอบข้อมูลซ้ำในฐานข้อมูล
+    for (const r of rows.value) {
+      const exists = await isDuplicateInDb(r)
+      if (exists) {
+        duplicates.push(`- ${r.ap_number || r.po_id || 'ไม่ระบุ'} : ${r.item_ref || 'ไม่ระบุรายการ'}`)
+      }
+    }
+
+    if (duplicates.length > 0) {
+      await Swal.fire({
+        title: 'พบข้อมูลซ้ำในระบบ',
+        html: `<div class="text-left mt-2">รายการต่อไปนี้มีอยู่ในฐานข้อมูลแล้ว:<br><br>${duplicates.join('<br>')}</div>`,
+        icon: 'warning',
+        confirmButtonText: 'ตกลง',
+        confirmButtonColor: '#3085d6',
+      })
+      saving.value = false
+      return
+    }
+
     const createdBy = createdByText()
     const payload = (rows.value || []).map((r) => ({
       ap_number: r.ap_number ?? null,
@@ -1131,8 +1218,20 @@ watch(
               <tr v-for="(row, idx) in rows" :key="row._tmp_id" class="hover:bg-gray-50/50 transition-colors">
                 <td class="p-3 text-center text-gray-400">{{ rows.length - idx }}</td>
                 <td class="p-3">
-                  <div class="font-medium" style="color: var(--color-text-primary)">{{ row.ap_number || '-' }}</div>
-                  <div class="text-[11px]" style="color: var(--color-text-muted)">PO: {{ row.po_id || '-' }}</div>
+                  <div 
+                    class="font-medium" 
+                    :class="row._is_duplicate ? 'text-red-500' : ''"
+                    :style="row._is_duplicate ? { color: '#ef4444' } : { color: 'var(--color-text-primary)' }"
+                  >
+                    {{ row.ap_number || '-' }}
+                  </div>
+                  <div 
+                    class="text-[11px]" 
+                    :class="row._is_duplicate ? 'text-red-400' : ''"
+                    :style="row._is_duplicate ? { color: '#f87171' } : { color: 'var(--color-text-muted)' }"
+                  >
+                    PO: {{ row.po_id || '-' }}
+                  </div>
                 </td>
                 <td class="p-3">
                   <div class="truncate font-medium" style="color: var(--color-text-primary)" :title="row.item_ref">

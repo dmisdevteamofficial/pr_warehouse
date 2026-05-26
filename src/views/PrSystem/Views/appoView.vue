@@ -4,6 +4,7 @@ import { supabase, supabaseEmployee } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { useTrcloudStore } from '@/stores/trcloud'
 import { useUiStore } from '@/stores/ui'
+import Swal from 'sweetalert2'
 
 const auth = useAuthStore()
 const trcloudStore = useTrcloudStore()
@@ -464,6 +465,8 @@ async function handleAutofill(val) {
   const list = Array.isArray(val) ? val : [val]
   if (list.length === 0) return
 
+  ui.showToast(`กำลังโหลดข้อมูล ${list.length} รายการ...`, 'info')
+
   // วนลูปเพิ่มทุกรายการเข้าตารางทันที
   for (const identity of list) {
     await fetchApAutofill(identity)
@@ -487,6 +490,11 @@ async function handleAutofill(val) {
       remark: (form.value.remark || '').trim() || null,
       _qty_auto_preview: qtyAutoPreview.value,
     }
+
+    // ตรวจสอบซ้ำใน DB เพื่อแสดงสีแดง
+    const isDbDuplicate = await checkDuplicateInDatabase(payload)
+    payload._is_duplicate = isDbDuplicate
+
     rows.value = [{ _tmp_id: crypto.randomUUID(), ...payload }, ...(rows.value || [])]
   }
 
@@ -494,6 +502,7 @@ async function handleAutofill(val) {
   showAddedTable.value = true
   await nextTick()
   scrollToAddedTable()
+  ui.showToast('โหลดข้อมูลสำเร็จ', 'success')
 }
 
 function formatNumber(value) {
@@ -501,6 +510,25 @@ function formatNumber(value) {
   const n = Number(value)
   if (!Number.isFinite(n)) return '-'
   return n.toLocaleString('th-TH')
+}
+
+async function checkDuplicateInDatabase(payload) {
+  try {
+    const { data, error } = await supabase
+      .from('ap_requests')
+      .select('id')
+      .eq('ap_number', payload.ap_number)
+      .eq('item_ref', payload.item_ref)
+      .eq('po_id', payload.po_id)
+      .eq('po_date', payload.po_date)
+      .maybeSingle()
+
+    if (error) throw error
+    return !!data
+  } catch (err) {
+    console.error('Check duplicate failed:', err)
+    return false
+  }
 }
 
 async function addRow() {
@@ -531,6 +559,26 @@ async function addRow() {
     remark: (form.value.remark || '').trim() || null,
     _qty_auto_preview: qtyAutoPreview.value,
   }
+
+  // Check duplicate in temporary table (local rows)
+  const isLocalDuplicate = rows.value.some(r => 
+    r.ap_number === payload.ap_number &&
+    r.item_ref === payload.item_ref &&
+    r.po_id === payload.po_id &&
+    r.po_date === payload.po_date &&
+    r._tmp_id !== editingTmpId.value
+  )
+
+  if (isLocalDuplicate) {
+    ui.showToast('มีข้อมูลรายการนี้ในตารางเตรียมบันทึกแล้ว', 'warning')
+    return
+  }
+
+  // Check duplicate in database to show color
+  saving.value = true
+  const isDbDuplicate = await checkDuplicateInDatabase(payload)
+  saving.value = false
+  payload._is_duplicate = isDbDuplicate
 
   if (editingTmpId.value) {
     // แก้ไขรายการเดิม
@@ -698,6 +746,30 @@ async function submitEdit() {
       updated_at: new Date().toISOString(),
     }
 
+    // Check duplicate in database (excluding current row)
+    const { data: dupData, error: dupError } = await supabase
+      .from('ap_requests')
+      .select('id')
+      .eq('ap_number', payload.ap_number)
+      .eq('item_ref', payload.item_ref)
+      .eq('po_id', payload.po_id)
+      .eq('po_date', payload.po_date)
+      .neq('id', editRowId.value)
+      .maybeSingle()
+
+    if (dupError) throw dupError
+    if (dupData) {
+      await Swal.fire({
+        title: 'พบข้อมูลซ้ำในระบบ',
+        text: 'ไม่สามารถบันทึกได้ เนื่องจากมีข้อมูลรายการนี้ในระบบแล้ว (เลขที่ AP, เลขที่ PO, วันที่ และรายการ ซ้ำ)',
+        icon: 'warning',
+        confirmButtonText: 'ตกลง',
+        confirmButtonColor: '#3085d6',
+      })
+      saving.value = false
+      return
+    }
+
     const { error } = await supabase.from('ap_requests').update(payload).eq('id', editRowId.value)
     if (error) throw error
 
@@ -727,6 +799,28 @@ async function submitAll() {
   }
   saving.value = true
   try {
+    const duplicates = []
+    
+    // 1. ตรวจสอบข้อมูลซ้ำในฐานข้อมูล
+    for (const r of rows.value) {
+      const exists = await checkDuplicateInDatabase(r)
+      if (exists) {
+        duplicates.push(`- ${r.ap_number || r.po_id || 'ไม่ระบุ'} : ${r.item_ref || 'ไม่ระบุรายการ'}`)
+      }
+    }
+
+    if (duplicates.length > 0) {
+      await Swal.fire({
+        title: 'พบข้อมูลซ้ำในระบบ',
+        html: `<div class="text-left mt-2">รายการต่อไปนี้มีอยู่ในฐานข้อมูลแล้ว:<br><br>${duplicates.join('<br>')}</div>`,
+        icon: 'warning',
+        confirmButtonText: 'ตกลง',
+        confirmButtonColor: '#3085d6',
+      })
+      saving.value = false
+      return
+    }
+
     const createdBy = createdByText()
     const payload = (rows.value || []).map((r) => ({
       ap_number: r.ap_number ?? null,
@@ -1207,9 +1301,27 @@ watch(
                   </button>
                 </td>
                 <td class="px-3 py-2 whitespace-nowrap" style="border-right: 1px solid var(--color-border)">
-                  <div class="font-semibold" style="color: #2563eb">AP: {{ r.ap_number || '-' }}</div>
-                  <div class="font-medium" style="color: var(--color-text-primary)">PO: {{ r.po_id || '-' }}</div>
-                  <div class="text-[11px]" style="color: var(--color-text-muted)">เปิด PO: {{ formatThaiDate(r.po_date) }}</div>
+                  <div 
+                    class="font-semibold" 
+                    :class="r._is_duplicate ? 'text-red-500' : ''"
+                    :style="r._is_duplicate ? { color: '#ef4444' } : { color: '#2563eb' }"
+                  >
+                    AP: {{ r.ap_number || '-' }}
+                  </div>
+                  <div 
+                    class="font-medium" 
+                    :class="r._is_duplicate ? 'text-red-400' : ''"
+                    :style="r._is_duplicate ? { color: '#f87171' } : { color: 'var(--color-text-primary)' }"
+                  >
+                    PO: {{ r.po_id || '-' }}
+                  </div>
+                  <div 
+                    class="text-[11px]" 
+                    :class="r._is_duplicate ? 'text-red-300' : ''"
+                    :style="r._is_duplicate ? { color: '#fca5a5' } : { color: 'var(--color-text-muted)' }"
+                  >
+                    เปิด PO: {{ formatThaiDate(r.po_date) }}
+                  </div>
                 </td>
                 <td class="px-3 py-2" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.supplier_name || '-' }}</td>
                 <td class="px-3 py-2" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">
