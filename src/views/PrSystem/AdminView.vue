@@ -26,6 +26,7 @@ import PoView from "./Views/poView.vue"
 import ApView from "./Views/apView.vue"
 import TrcloudApItemsView from "./Views/trcloudApItemsView.vue"
 import TrcloudPoItemsView from "./Views/trcloudPoItemsView.vue"
+import TrcloudExpItemsView from "./Views/expView.vue"
 import PvView from "./Views/pvView.vue"
 import TrcloudDocsView from "./Views/trcloudDocsView.vue"
 import PrpoappvView from "./Views/prpoappvView.vue"
@@ -50,6 +51,7 @@ const selectionOptions = [
   { itemId: "/#/pr_po", itemLabel: "รายการ PO" },
   { itemId: "/#/pr_ap", itemLabel: "รายการ AP" },
   { itemId: "/#/pr_po_items", itemLabel: "รายการ PO (สินค้า)" },
+  { itemId: "/#/pr_po_items_detail", itemLabel: "รายการ EXP (สินค้า)" },
   { itemId: "/#/pr_ap_items", itemLabel: "รายการ AP (สินค้า)" },
   { itemId: "/#/pr_trcloud", itemLabel: "เอกสาร TRCloud" },
   { itemId: "/#/pr_pv", itemLabel: "รายการ PV" },
@@ -94,6 +96,7 @@ const activePage = computed(() => {
   const id = (selection.value.itemId ?? "").toString()
   if (id.includes("dashboard")) return "dashboard"
   if (id.includes("pr_list")) return "pr_list"
+  if (id.includes("pr_po_items_detail")) return "pr_exp_items"
   if (id.includes("pr_po_items")) return "pr_po_items"
   if (id.includes("pr_po")) return "pr_po"
   if (id.includes("pr_ap_items")) return "pr_ap_items"
@@ -268,6 +271,10 @@ const onLogout = async () => {
         <ApView v-else-if="activePage === 'pr_ap'" />
         <TrcloudPoItemsView 
           v-else-if="activePage === 'pr_po_items'" 
+          @selectPage="onSelect" 
+        />
+        <TrcloudExpItemsView 
+          v-else-if="activePage === 'pr_exp_items'" 
           @selectPage="onSelect" 
         />
         <TrcloudApItemsView 

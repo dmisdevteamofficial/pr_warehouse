@@ -58,7 +58,7 @@ export const useTrcloudStore = defineStore('trcloud', () => {
   }
 
   const buildApItemRow = (invoice, item) => {
-    const invoiceNumber = invoice?.invoice_number || invoice?.doc_number || invoice?.reference || invoice?.id || ''
+    const invoiceNumber = invoice?.expense_number || invoice?.invoice_number || invoice?.doc_number || invoice?.reference || invoice?.id || ''
     const companyFormat = invoice?.company_format || ''
     const docNumber = companyFormat ? `${companyFormat}${invoiceNumber}` : String(invoiceNumber || '')
     const itemName = item?.product_name || item?.name || item?.title || item?.description || item?.item_name || item?.item || item?.product || ''
@@ -221,6 +221,116 @@ export const useTrcloudStore = defineStore('trcloud', () => {
   const apItemRows = computed(() => extractApItemRows(apRows.value))
   const poItemRows = computed(() => extractPoItemRows(poRows.value))
   const prItemRows = computed(() => extractPrItemRows(prRows.value))
+
+  const buildExpenseItemRow = (exp, item) => {
+    const expNumber = exp?.expense_number || exp?.invoice_number || exp?.doc_number || exp?.reference || exp?.id || ''
+    const companyFormat = exp?.company_format || ''
+    const docNumber = companyFormat ? `${companyFormat}${expNumber}` : String(expNumber || '')
+    const itemName = item?.description || item?.acc_th || item?.acc_en || item?.name || item?.title || item?.item_name || ''
+    const status = exp?.status || exp?.payment_status || exp?.status_payment || ''
+    const quantity = item?.quantity || item?.qty || 1
+    const price = item?.total || item?.price || 0
+    const itemTotal = exp?.grand_total || exp?.total || item?.total || 0
+
+    return {
+      unique_id: item?.x_id || item?.item_id || `${docNumber}_${itemName}_${itemTotal}_${Math.random().toString(36).substr(2, 9)}`,
+      doc_number: docNumber,
+      invoice_number: expNumber,
+      issue_date: exp?.issue_date || exp?.date || '',
+      due_date: exp?.due_date || '',
+      organization: exp?.organization || exp?.name || '',
+      status,
+      item_name: cleanApText(itemName),
+      quantity: quantity,
+      unit: item?.unit || 'รายการ',
+      price: price,
+      item_total: itemTotal,
+      acc_code: item?.acc_code || '',
+      acc_th: item?.acc_th || '',
+      acc_en: item?.acc_en || '',
+      invoice_note: exp?.invoice_note || exp?.remark || exp?.note || '',
+      staff: exp?.staff || exp?.created_by || '',
+      department: exp?.department || '',
+      project: exp?.project || '',
+      source: exp?.source || '',
+      ref_po: exp?.reference || exp?.po || '',
+      payment: exp?.payment || 0
+    }
+  }
+
+  const extractExpenseItemRows = (expenseData, poItems = []) => {
+    if (!Array.isArray(expenseData) || !expenseData.length) return []
+    const rows = []
+    for (const exp of expenseData) {
+      const [itemKey, itemList] = findApItemList(exp)
+      if (itemList) {
+        const baseExp = { ...exp }
+        delete baseExp[itemKey]
+        for (const item of itemList) {
+          rows.push(buildExpenseItemRow(baseExp, item))
+        }
+      } else {
+        const itemName = exp?.description || exp?.remark || exp?.note || exp?.title || exp?.item_name || ''
+        const expNumber = exp?.expense_number || exp?.invoice_number || exp?.doc_number || exp?.reference || exp?.id || ''
+        const companyFormat = exp?.company_format || ''
+        const docNumber = companyFormat ? `${companyFormat}${expNumber}` : String(expNumber || '')
+        const price = exp?.total || exp?.price || 0
+        const itemTotal = exp?.grand_total || exp?.total || 0
+        const quantity = exp?.quantity || exp?.qty || 1
+        const refPo = exp?.reference || exp?.po || exp?.po_number || ''
+
+        // Fallback to PO items if this EXP has a Ref PO but no items of its own
+        const matchedPoItems = refPo && Array.isArray(poItems) 
+          ? poItems.filter(p => p.doc_number === refPo || p.invoice_number === refPo) 
+          : []
+
+        if (matchedPoItems.length > 0) {
+          for (const poItem of matchedPoItems) {
+            rows.push({
+              ...poItem,
+              unique_id: `exp_link_${exp.id || exp.expense_id}_${poItem.unique_id}`,
+              doc_number: docNumber,
+              invoice_number: expNumber,
+              issue_date: exp?.issue_date || exp?.date || poItem.issue_date,
+              organization: exp?.organization || exp?.name || poItem.organization,
+              status: exp?.status || exp?.payment_status || poItem.status,
+               payment: exp?.payment || 0,
+               invoice_note: exp?.invoice_note || exp?.remark || exp?.note || '',
+               ref_po: refPo
+             })
+           }
+         } else {
+           rows.push({
+             unique_id: exp?.expense_id || exp?.id || `${docNumber}_${exp?.issue_date}_${itemTotal}`,
+             doc_number: docNumber,
+             invoice_number: expNumber,
+             issue_date: exp?.issue_date || exp?.date || '',
+             due_date: exp?.due_date || '',
+             organization: exp?.organization || exp?.name || '',
+             status: exp?.status || exp?.payment_status || '',
+             item_name: cleanApText(itemName),
+             quantity: quantity,
+             unit: exp?.unit || 'รายการ',
+             price: price,
+             item_total: itemTotal,
+             acc_code: exp?.acc_code || '',
+             acc_th: exp?.acc_th || '',
+             acc_en: exp?.acc_en || '',
+             invoice_note: exp?.invoice_note || exp?.remark || exp?.note || '',
+             staff: exp?.staff || exp?.created_by || '',
+            department: exp?.department || '',
+            project: exp?.project || '',
+            source: exp?.source || '',
+            ref_po: refPo,
+            payment: exp?.payment || 0
+          })
+        }
+      }
+    }
+    return rows
+  }
+
+  const expenseItemRows = computed(() => extractExpenseItemRows(expenseRows.value, poItemRows.value))
   
   const loading = ref(false)
   const lastFetched = ref(null)
@@ -392,7 +502,9 @@ export const useTrcloudStore = defineStore('trcloud', () => {
 
         // Determine if this specific endpoint needs JSON payload
         let currentUseJson = useJson
-        if (selectedEndpoint.includes('_search_keyword.php')) {
+        if (selectedEndpoint.includes('expense_search_keyword.php')) {
+          currentUseJson = false // Expense list uses direct form-data
+        } else if (selectedEndpoint.includes('_search_keyword.php')) {
           // PV uses JSON even for _search_keyword.php
           if (type === 'pv') {
             currentUseJson = true
@@ -404,7 +516,7 @@ export const useTrcloudStore = defineStore('trcloud', () => {
         }
 
         while (true) {
-          const payload = {
+          let finalPayload = {
             company_id: companyId,
             passkey: passkey,
             start: page,
@@ -435,7 +547,19 @@ export const useTrcloudStore = defineStore('trcloud', () => {
             type: docType
           }
 
-          let finalPayload = payload
+          if (type === 'expense') {
+            // Match the 27 fields from Python example for XExpense
+            finalPayload = {
+              ...finalPayload,
+              from: dateFrom.value,
+              to: dateTo.value,
+              date_from: dateFrom.value,
+              date_to: dateTo.value,
+              type: 'exp', // Important for XExpense
+              advance_search: 1
+            }
+          }
+
           if (type === 'ap' && String(selectedEndpoint || '').toLowerCase().includes('invoice_list.php')) {
             finalPayload = {
               company_id: companyId,
@@ -710,7 +834,7 @@ export const useTrcloudStore = defineStore('trcloud', () => {
 
   return {
     prRows, poRows, apRows, pvRows, expenseRows,
-    apItemRows, poItemRows,
+    apItemRows, poItemRows, expenseItemRows,
     loading, lastFetched, isLoaded,
     dateFrom, dateTo,
     appoFormState, appoRowsState, appoApSearchTextState,

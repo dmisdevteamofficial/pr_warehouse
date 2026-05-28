@@ -94,14 +94,16 @@ async function fetchApNumberOptions() {
     if (!trcloudStore.apRows.length) fetchPromises.push(trcloudStore.fetchTrcloudData('ap'))
     if (!trcloudStore.poRows.length) fetchPromises.push(trcloudStore.fetchTrcloudData('po'))
     if (!trcloudStore.prRows.length) fetchPromises.push(trcloudStore.fetchTrcloudData('pr'))
+    if (!trcloudStore.expenseRows.length) fetchPromises.push(trcloudStore.fetchTrcloudData('expense'))
     
     if (fetchPromises.length) await Promise.all(fetchPromises)
 
-    // Combine items from AP, PO, and PR
+    // Combine items from AP, PO, PR, and EXP
     const allItems = [
       ...(trcloudStore.apItemRows || []).map(r => ({ doc: r.doc_number || r.invoice_number, item: r.item_name, type: 'AP' })),
       ...(trcloudStore.poItemRows || []).map(r => ({ doc: r.expense || r.doc_number || r.invoice_number, item: r.item_name, type: 'PO' })),
-      ...(trcloudStore.prItemRows || []).map(r => ({ doc: r.doc_number || r.invoice_number, item: r.item_name, type: 'PR' }))
+      ...(trcloudStore.prItemRows || []).map(r => ({ doc: r.doc_number || r.invoice_number, item: r.item_name, type: 'PR' })),
+      ...(trcloudStore.expenseItemRows || []).map(r => ({ doc: r.doc_number || r.invoice_number, item: r.item_name, type: 'EXP' }))
     ]
 
     const out = allItems.map(r => {
@@ -182,12 +184,13 @@ async function fetchApAutofill(apIdentity) {
   apInfoLoading.value = true
   try {
     // Ensure data is loaded
-    const typeMatch = identity.match(/\[(AP|PO|PR)\]$/)
+    const typeMatch = identity.match(/\[(AP|PO|PR|EXP)\]$/)
     const type = typeMatch ? typeMatch[1] : null
 
     if (type === 'AP' && !trcloudStore.apRows.length) await trcloudStore.fetchTrcloudData('ap')
     if (type === 'PO' && !trcloudStore.poRows.length) await trcloudStore.fetchTrcloudData('po')
     if (type === 'PR' && !trcloudStore.prRows.length) await trcloudStore.fetchTrcloudData('pr')
+    if (type === 'EXP' && !trcloudStore.expenseRows.length) await trcloudStore.fetchTrcloudData('expense')
     
     let cleanIdentity = identity
     if (type) {
@@ -202,12 +205,14 @@ async function fetchApAutofill(apIdentity) {
     const searchInAp = () => trcloudStore.apItemRows.find(r => (r.doc_number === docNum || r.invoice_number === docNum) && r.item_name === itemName)
     const searchInPo = () => trcloudStore.poItemRows.find(r => (r.expense === docNum || r.doc_number === docNum || r.invoice_number === docNum) && r.item_name === itemName)
     const searchInPr = () => trcloudStore.prItemRows.find(r => (r.doc_number === docNum || r.invoice_number === docNum) && r.item_name === itemName)
+    const searchInExp = () => trcloudStore.expenseItemRows.find(r => (r.doc_number === docNum || r.invoice_number === docNum) && r.item_name === itemName)
 
     if (type === 'AP') trcloudItem = searchInAp()
     else if (type === 'PO') trcloudItem = searchInPo()
     else if (type === 'PR') trcloudItem = searchInPr()
+    else if (type === 'EXP') trcloudItem = searchInExp()
     else {
-      trcloudItem = searchInAp() || searchInPo() || searchInPr()
+      trcloudItem = searchInAp() || searchInPo() || searchInPr() || searchInExp()
     }
 
     if (trcloudItem) {
@@ -218,13 +223,14 @@ async function fetchApAutofill(apIdentity) {
         form.value.ap_number = trcloudItem.expense || ''
         form.value.po_id = trcloudItem.doc_number || trcloudItem.invoice_number || ''
       } else {
-        form.value.ap_number = type === 'AP' ? (trcloudItem.doc_number || trcloudItem.invoice_number || '') : ''
+        form.value.ap_number = (type === 'AP' || type === 'EXP') ? (trcloudItem.doc_number || trcloudItem.invoice_number || '') : ''
         form.value.po_id = type === 'PO' ? (trcloudItem.doc_number || trcloudItem.invoice_number || '') : (trcloudItem.ref_po || '')
       }
       
       let staff = trcloudItem.staff || ''
+      let poId = form.value.po_id
       
-      if (type === 'AP' || !staff) {
+      if ((type === 'AP' || type === 'EXP') || !staff) {
         const relatedPo = trcloudStore.poItemRows.find(p => {
           const isSameDoc = poId && (p.doc_number === poId || p.invoice_number === poId)
           const isSameItem = p.item_name === trcloudItem.item_name
@@ -236,6 +242,7 @@ async function fetchApAutofill(apIdentity) {
           staff = relatedPo.staff || ''
         }
       }
+      form.value.po_id = poId
       form.value.po_created_by = staff
 
       const rawQty = trcloudItem.quantity || trcloudItem.qty || 0
@@ -261,7 +268,9 @@ async function fetchApAutofill(apIdentity) {
       
       form.value.department = dept
       form.value.supplier_name = trcloudItem.organization || ''
-      form.value.item_ref = trcloudItem.item_name || ''
+      
+      // Use invoice_note for item_ref if available (matches what's shown in the table)
+      form.value.item_ref = trcloudItem.invoice_note || trcloudItem.item_name || ''
       
       const rawPrice = trcloudItem.item_total || trcloudItem.total || trcloudItem.price || 0
       form.value.total_price = !isNaN(parseFloat(rawPrice)) ? parseFloat(rawPrice) : null
@@ -272,12 +281,15 @@ async function fetchApAutofill(apIdentity) {
       form.value.ap_status = 'ยังไม่ชำระ'
 
       form.value.currency_name = String(trcloudItem.currency || 'LAK').toUpperCase() 
+      
+      // If we don't use it for item_ref, we don't force it into remark
+      // form.value.remark = ...
 
       apInfo.value = {
         po_id: form.value.po_id || '-',
         po_date: poDateIso ? formatThaiDate(poDateIso) : '-',
         supplier_name: trcloudItem.organization || '-',
-        item_ref: trcloudItem.item_name || '-',
+        item_ref: form.value.item_ref || '-',
         qty_order: form.value.qty_order || '-',
         total_price: form.value.total_price || '-',
         option_name: '-',

@@ -29,6 +29,7 @@ const menuItems = [
       { id: "/#/pr_list", icon: "fa-list-check", label: "รายการ [PR]" },
       { id: "/#/pr_po", icon: "fa-file-invoice-dollar", label: "รายการ [PO]" },
       { id: "/#/pr_po_items", icon: "fa-boxes-stacking", label: "รายการ [PO (สินค้า)]" },
+      { id: "/#/pr_po_items_detail", icon: "fa-boxes-stacking", label: "รายการ [EXP (สินค้า)]" },
       { id: "/#/pr_ap", icon: "fa-file-invoice", label: "รายการ [AP]" },
       { id: "/#/pr_ap_items", icon: "fa-boxes-packing", label: "รายการ [AP (สินค้า)]" },
       { id: "/#/pr_trcloud", icon: "fa-layer-group", label: "เอกสาร TRCloud" },
