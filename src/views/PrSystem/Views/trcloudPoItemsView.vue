@@ -9,6 +9,7 @@ const auth = useAuthStore()
 const emit = defineEmits(['selectPage'])
 const searchQuery = ref('')
 const statusFilter = ref('')
+const vendorFilter = ref('')
 const viewMode = ref('all') // 'all' or 'tracked'
 const openMenuId = ref(null) // ID ของแถวที่เปิดเมนูค้างไว้
 const selectedRows = ref([]) // รายการที่เลือกเพื่อส่งไปฟอร์ม
@@ -155,11 +156,19 @@ const availableStatuses = computed(() => {
   return [...new Set(trcloudStore.poItemRows.map((r) => r.status).filter(Boolean))].sort()
 })
 
+const availableVendors = computed(() => {
+  return [...new Set(trcloudStore.poItemRows.map((r) => r.organization).filter(Boolean))].sort()
+})
+
 const filteredRows = computed(() => {
   let rows = trcloudStore.poItemRows
   
   if (statusFilter.value) {
     rows = rows.filter((row) => String(row.status || '').includes(statusFilter.value))
+  }
+
+  if (vendorFilter.value) {
+    rows = rows.filter((row) => String(row.organization || '') === vendorFilter.value)
   }
   
   if (viewMode.value === 'tracked') {
@@ -367,6 +376,13 @@ onMounted(() => {
       </div>
       
       <div class="flex items-center gap-2 ml-2">
+        <label class="text-[12px] font-medium" style="color: var(--color-text-muted)">คู่ค้า</label>
+        <select v-model="vendorFilter" class="px-3 py-2 rounded-lg border bg-transparent text-[13px] focus:outline-none max-w-[200px]" style="border-color: var(--color-border); color: var(--color-text-primary)">
+          <option value="">ทั้งหมด</option>
+          <option v-for="vendor in availableVendors" :key="vendor" :value="vendor">{{ vendor }}</option>
+        </select>
+      </div>
+      <div class="flex items-center gap-2">
         <label class="text-[12px] font-medium" style="color: var(--color-text-muted)">สถานะ</label>
         <select v-model="statusFilter" class="px-3 py-2 rounded-lg border bg-transparent text-[13px] focus:outline-none" style="border-color: var(--color-border); color: var(--color-text-primary)">
           <option value="">ทั้งหมด</option>

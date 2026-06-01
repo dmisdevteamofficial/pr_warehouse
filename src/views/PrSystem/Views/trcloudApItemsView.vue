@@ -72,15 +72,18 @@ async function loadTrackedRowIdsFromCloud() {
   }
 }
 
-// ฟังก์ชันสำหรับล้าง ID ที่ไม่มีอยู่ในข้อมูลปัจจุบันแล้ว
+// ฟังก์ชันสำหรับล้าง ID ที่ไม่มีอยู่ในข้อมูลปัจจุบันแล้ว หรือรายการที่ชำระแล้ว
 function cleanupTrackedIds() {
   if (!trcloudStore.apItemRows || trcloudStore.apItemRows.length === 0) return
   
   const currentIds = new Set(trcloudStore.apItemRows.map(r => getRowIdentity(r)))
-  const validTrackedIds = trackedRowIds.value.filter(id => currentIds.has(id))
+  const paidIds = new Set(trcloudStore.apItemRows.filter(r => mapStatus(r.status) === 'ชำระแล้ว').map(r => getRowIdentity(r)))
+  
+  const validTrackedIds = trackedRowIds.value.filter(id => currentIds.has(id) && !paidIds.has(id))
   
   if (validTrackedIds.length !== trackedRowIds.value.length) {
     trackedRowIds.value = validTrackedIds
+    persistTrackedRowIds()
   }
 }
 
@@ -510,6 +513,15 @@ onMounted(() => {
               <td class="px-4 py-3 font-mono" style="color: var(--color-text-primary)">{{ Number(row.payment || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</td>
               <td class="px-4 py-3 text-center">
                 <input
+                  v-if="activeTab === 'all' && mapStatus(row.status) !== 'ชำระแล้ว'"
+                  type="checkbox"
+                  class="w-4 h-4 accent-blue-600 cursor-pointer"
+                  :checked="isTracked(row)"
+                  @change="toggleTracked(row, $event.target.checked)"
+                />
+                <i v-else-if="activeTab === 'all'" class="fa-solid fa-circle-check text-gray-300 text-[16px]"></i>
+                <input
+                  v-else
                   type="checkbox"
                   class="w-4 h-4 accent-blue-600 cursor-pointer"
                   :checked="isTracked(row)"
