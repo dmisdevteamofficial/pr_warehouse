@@ -47,28 +47,44 @@ const staffSummary = computed(() => {
 
   rows.forEach(row => {
     const staffName = row.staff || 'ไม่ระบุชื่อ'
+    const docId = row.document_number || row.po_id || row.id
+
     if (!summaryMap[staffName]) {
       summaryMap[staffName] = {
         name: staffName,
-        count: 0,
-        passedCount: 0,
-        notPassedCount: 0,
+        uniqueDocIds: new Set(),
+        uniquePoIds: new Set(),
+        uniqueApIds: new Set(),
         totalAmount: 0,
         items: []
       }
     }
-    summaryMap[staffName].count++
-    const hasAp = row.expense || row.ap_id || row.invoice_number?.includes('AP') || (row.status && row.status.includes('ชำระแล้ว'))
-    if (hasAp) {
-      summaryMap[staffName].passedCount++
-    } else {
-      summaryMap[staffName].notPassedCount++
-    }
-    summaryMap[staffName].totalAmount += parseFloat(row.grand_total || 0)
+    
+    // เก็บรายการทั้งหมดลงใน items เสมอ (สำหรับตารางรายละเอียด)
     summaryMap[staffName].items.push(row)
+
+    // นับจำนวนแบบไม่ซ้ำตามเลขที่เอกสาร
+    if (docId && !summaryMap[staffName].uniqueDocIds.has(docId)) {
+      summaryMap[staffName].uniqueDocIds.add(docId)
+
+      const hasAp = row.expense || row.ap_id || row.invoice_number?.includes('AP') || (row.status && row.status.includes('ชำระแล้ว'))
+      if (hasAp) {
+        summaryMap[staffName].uniqueApIds.add(docId)
+      } else {
+        summaryMap[staffName].uniquePoIds.add(docId)
+      }
+      
+      // บวกมูลค่าเฉพาะเลขที่เอกสารที่ไม่ซ้ำ
+      summaryMap[staffName].totalAmount += parseFloat(row.grand_total || 0)
+    }
   })
 
-  return Object.values(summaryMap).sort((a, b) => b.count - a.count)
+  return Object.values(summaryMap).map(s => ({
+    ...s,
+    count: s.uniqueDocIds.size,
+    passedCount: s.uniqueApIds.size,
+    notPassedCount: s.uniquePoIds.size
+  })).sort((a, b) => b.count - a.count)
 })
 
 // ข้อมูลรายละเอียดของ Staff ที่เลือก
@@ -301,13 +317,27 @@ function setAllData(shouldFetch = false) {
   const mm = String(now.getMonth() + 1).padStart(2, '0')
   const dd = String(now.getDate()).padStart(2, '0')
   const today = `${yyyy}-${mm}-${dd}`
-  const allFrom = '2020-01-01'
   
-  trcloudDateFrom.value = allFrom
-  trcloudDateTo.value = today
-  displayDateRange.value = { from: allFrom, to: today }
+  // ตั้งค่าเป็นค่าว่างเพื่อให้แสดง "ข้อมูลทั้งหมด" ใน UI
+  trcloudDateFrom.value = ''
+  trcloudDateTo.value = ''
+  displayDateRange.value = { from: '', to: '' }
   activeFilter.value = 'all'
-  if (shouldFetch) fetchData()
+  
+  // แต่ถ้าต้อง Fetch จาก Server ให้ใช้ช่วงวันที่กว้างๆ (2020) ไปขอข้อมูล
+  if (shouldFetch) {
+    const originalFrom = trcloudDateFrom.value
+    const originalTo = trcloudDateTo.value
+    
+    trcloudStore.dateFrom = '2020-01-01'
+    trcloudStore.dateTo = today
+    fetchData().then(() => {
+      // หลัง Fetch เสร็จ ให้ UI กลับมาเป็นค่าว่างเหมือนเดิมเพื่อความสวยงาม
+      trcloudDateFrom.value = ''
+      trcloudDateTo.value = ''
+      displayDateRange.value = { from: '', to: '' }
+    })
+  }
 }
 
 // Watch for manual date changes to reset activeFilter
@@ -319,12 +349,12 @@ watch([trcloudDateFrom, trcloudDateTo], () => {
   const today = `${yyyy}-${mm}-${dd}`
 
   if (trcloudDateFrom.value === today && trcloudDateTo.value === today) {
-    activeFilter.value = 'today'
-  } else if (trcloudDateFrom.value === '2020-01-01' && trcloudDateTo.value === today) {
-    activeFilter.value = 'all'
-  } else {
-    activeFilter.value = ''
-  }
+      activeFilter.value = 'today'
+    } else if (!trcloudDateFrom.value && !trcloudDateTo.value) {
+      activeFilter.value = 'all'
+    } else {
+      activeFilter.value = ''
+    }
 })
 
 function goToSubmitAmount() {
@@ -376,15 +406,14 @@ onBeforeUnmount(() => {
   if (chartInstance) chartInstance.destroy()
 })
 
-// watch poRows โดยตรง: รับ immediate เพื่อจับกรณี cache พร้อมแล้วตั้งแต่ mount
+// watch staffSummary: เพื่ออัปเดตกราฟเมื่อมีการกรองข้อมูล (เช่น กดปุ่ม วันนี้/ทั้งหมด)
 watch(
-  () => trcloudStore.poRows,
-  async (rows) => {
-    if (!rows || rows.length === 0) return
+  () => staffSummary.value,
+  async (newSummary) => {
     await nextTick()
     buildChart()
   },
-  { immediate: true }
+  { deep: true }
 )
 
 // watch chartRef: กรณี canvas DOM render ช้ากว่าข้อมูล
@@ -410,6 +439,13 @@ watch(chartRef, async (el) => {
           <span class="font-bold">{{ displayDateRange.from }}</span> 
           <span class="mx-2 opacity-50">ถึง</span> 
           <span class="font-bold">{{ displayDateRange.to }}</span>
+        </div>
+      </div>
+      <div v-else class="flex flex-col items-end gap-1">
+        <div class="text-[11px] font-medium text-gray-400 uppercase tracking-wider">กำลังแสดงข้อมูล</div>
+        <div class="text-[13px] px-4 py-1.5 rounded-lg bg-green-50 dark:bg-green-900/30 border border-green-100 dark:border-green-800 shadow-sm text-green-600">
+          <i class="fa-solid fa-list-check mr-2 opacity-70"></i>
+          <span class="font-bold">ข้อมูลทั้งหมดในระบบ</span>
         </div>
       </div>
     </div>
@@ -528,7 +564,11 @@ watch(chartRef, async (el) => {
               </template>
             </div>
             <div class="flex items-center gap-2">
-              <span v-if="selectedStaff" class="text-[12px]" style="color: var(--color-text-muted)">{{ staffDetails.length }} รายการ</span>
+              <div v-if="selectedStaff" class="flex items-center gap-3 mr-2">
+                <span class="text-[12px]" style="color: var(--color-text-muted)">
+                  จำนวนทั้งหมด <span class="font-bold text-orange-600">{{ staffDetails.length }}</span> รายการ
+                </span>
+              </div>
               <button v-if="selectedStaff" @click="clearSelection" class="text-[11px] px-2 py-1 rounded-lg border transition-colors hover:bg-gray-100 dark:hover:bg-gray-800" style="border-color: var(--color-border); color: var(--color-text-muted)">
                 <i class="fa-solid fa-xmark mr-1"></i>ล้าง
               </button>
