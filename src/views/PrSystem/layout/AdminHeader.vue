@@ -315,9 +315,6 @@ onMounted(() => {
   timerId = window.setInterval(() => {
     now.value = new Date()
   }, 1000)
-  if (!trcloudStore.isLoaded) {
-    trcloudStore.fetchAll()
-  }
   window.addEventListener("resize", onResize)
   window.addEventListener("pointerdown", onPointerDown)
   window.addEventListener("themechange", onThemeChange)

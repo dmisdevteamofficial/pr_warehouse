@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useTrcloudStore } from '@/stores/trcloud'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
+import { useTrackingStatus } from '@/composables/useTrackingStatus'
 
 const trcloudStore = useTrcloudStore()
 const auth = useAuthStore()
@@ -19,6 +20,9 @@ const TRACK_STORAGE_KEY = 'trcloud_exp_tracked_rows'
 const TRACK_TABLE = 'trcloud_tracking'
 const TRACK_DOC_TYPE = 'expense'
 const trackedRowIds = ref(loadTrackedRowIds())
+
+// สถานะการจัดการ: กรอกมือแล้ว (อยู่ใน exp_requests) / ส่ง LINE แล้ว
+const { load: loadTrackingStatus, isAdded: isAddedToTracking, isLineSent } = useTrackingStatus()
 
 function calculateAge(dateStr) {
   if (!dateStr) return 0
@@ -309,6 +313,7 @@ function toggleMenu(id) {
 
 onMounted(() => {
   loadTrackedRowIdsFromCloud()
+  loadTrackingStatus('exp')
   if (!trcloudStore.expenseRows.length) {
     refreshExpenseItemRows()
   }
@@ -456,7 +461,7 @@ onMounted(() => {
             <tr v-else-if="!filteredRows.length">
               <td colspan="10" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบรายการ EXP รายการสินค้า</td>
             </tr>
-            <tr v-for="(row, index) in filteredRows" :key="getRowIdentity(row)" class="dark:hover:bg-gray-200/50 hover:bg-blue-100/50 transition-colors" style="border-bottom: 1px solid var(--color-border)">
+            <tr v-for="(row, index) in filteredRows" :key="getRowIdentity(row)" class="dark:hover:bg-gray-200/50 hover:bg-blue-100/50 transition-colors" :style="{ borderBottom: '1px solid var(--color-border)', ...(isAddedToTracking(row) ? { boxShadow: 'inset 3px 0 0 #16a34a', background: 'rgba(16,185,129,0.06)' } : {}) }">
               <td class="px-4 py-3 text-center relative" style="border-right: 1px solid var(--color-border)">
                 <div v-if="showSelection">
                   <input 
@@ -501,6 +506,14 @@ onMounted(() => {
               <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">
                 <div v-if="row.acc_code" class="text-[11px] font-mono text-blue-500 mb-0.5">{{ row.acc_code }}</div>
                 <div>{{ row.invoice_note || row.item_name || '-' }}</div>
+                <div class="flex flex-wrap gap-1 mt-1">
+                  <span v-if="isAddedToTracking(row)" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold" style="background: rgba(16,185,129,0.15); color: #16a34a">
+                    <i class="fa-solid fa-circle-check"></i> เข้าตารางแล้ว
+                  </span>
+                  <span v-if="isLineSent(row)" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold" style="background: rgba(6,182,212,0.15); color: #0891b2">
+                    <i class="fa-brands fa-line"></i> ส่ง LINE แล้ว
+                  </span>
+                </div>
               </td>
               <td class="px-4 py-3 font-mono" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ Number(row.payment || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</td>
               <td class="px-4 py-3 text-center" style="border-right: 1px solid var(--color-border)">

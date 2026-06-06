@@ -441,20 +441,24 @@ onUnmounted(() => {
                     <!-- Table Header Preview -->
                     <div style="flex: 1; background: white;">
                       <table style="width: 100%; border-collapse: collapse; table-layout: fixed; border-bottom: 1px solid black;">
-                        <tr style="background: #f3f4f6; font-weight: bold; text-align: center; font-size: 9px; height: 25px;">
-                          <td style="border: 1px solid black; width: 35px;">ลำดับ</td>
-                          <td style="border: 1px solid black; width: 95px;">รหัสสินค้า</td>
-                          <td style="border: 1px solid black;">รายการ</td>
-                          <td style="border: 1px solid black; width: 40px;">รับจริง</td>
-                          <td style="border: 1px solid black; width: 40px;">หน่วย</td>
-                        </tr>
-                        <tr v-for="i in 5" :key="i" style="height: 20px; border-bottom: 1px solid #eee;">
-                          <td style="border-right: 1px solid black;"></td>
-                          <td style="border-right: 1px solid black;"></td>
-                          <td style="border-right: 1px solid black;"></td>
-                          <td style="border-right: 1px solid black;"></td>
-                          <td></td>
-                        </tr>
+                        <thead>
+                            <tr style="background: #f3f4f6; font-weight: bold; text-align: center; font-size: 9px; height: 25px;">
+                            <td style="border: 1px solid black; width: 35px;">ลำดับ</td>
+                            <td style="border: 1px solid black; width: 95px;">รหัสสินค้า</td>
+                            <td style="border: 1px solid black;">รายการ</td>
+                            <td style="border: 1px solid black; width: 40px;">รับจริง</td>
+                            <td style="border: 1px solid black; width: 40px;">หน่วย</td>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="i in 5" :key="i" style="height: 20px; border-bottom: 1px solid #eee;">
+                            <td style="border-right: 1px solid black;"></td>
+                            <td style="border-right: 1px solid black;"></td>
+                            <td style="border-right: 1px solid black;"></td>
+                            <td style="border-right: 1px solid black;"></td>
+                            <td></td>
+                          </tr>
+                        </tbody>
                       </table>
                     </div>
                   </div>

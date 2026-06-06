@@ -157,14 +157,14 @@ const closeMobile = () => {
     />
     <aside
       :class="[
-        'flex flex-col justify-between bg-white dark:bg-gray-950 border-r border-gray-200 dark:border-gray-800 h-screen py-4 px-2 transition-all duration-300 transform-gpu',
+        'flex flex-col bg-white dark:bg-gray-950 border-r border-gray-200 dark:border-gray-800 h-screen py-4 px-2 overflow-hidden transition-all duration-300 transform-gpu',
         collapsed ? 'w-16' : 'w-56',
         'fixed left-0 top-0 z-50 shadow-xl sm:static sm:z-auto sm:shadow-none',
         props.mobileOpen ? 'translate-x-0' : '-translate-x-full sm:translate-x-0',
       ]"
     >
     <!-- Logo + Toggle -->
-    <div>
+    <div class="flex flex-1 min-h-0 flex-col">
       <div class="flex items-center justify-between px-2 mb-6">
         <div class="flex items-center gap-2">
           <div
@@ -202,97 +202,125 @@ const closeMobile = () => {
       </div>
 
       <!-- Menu Items -->
-      <div v-for="group in menuItems" :key="group.group" class="mb-2">
-        <AdminMenuGroup :label="group.group" :collapsed="collapsed">
-          <div v-for="item in group.items" :key="item.id">
-            <div v-if="item.children">
-              <div @click="onParentClick(item)">
-                <li
+      <div class="sidebar-menu-scroll flex-1 min-h-0 overflow-y-auto px-1">
+        <div v-for="group in menuItems" :key="group.group" class="mb-2">
+          <AdminMenuGroup :label="group.group" :collapsed="collapsed">
+            <div v-for="item in group.items" :key="item.id">
+              <div v-if="item.children">
+                <div @click="onParentClick(item)">
+                  <li
+                    :class="[
+                      'relative flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors',
+                      isSectionActive(item)
+                        ? 'bg-blue-50 dark:bg-blue-500/30 text-primary-DEFAULT border-l-[3px] border-blue-600 dark:border-blue-500 pl-[9px]'
+                        : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white',
+                    ]"
+                  >
+                    <i class="fa-solid w-5 text-center" :class="item.icon"></i>
+                    <span v-if="!collapsed" class="text-sm font-medium whitespace-nowrap transition-all duration-300">
+                      {{ item.label }}
+                    </span>
+                    <i
+                      v-if="!collapsed"
+                      class="fa-solid fa-chevron-down text-[12px] ml-auto transition-transform duration-200"
+                      :class="{ 'rotate-180': isSectionOpen(item) }"
+                      :style="{ color: isSectionActive(item) ? 'var(--color-text-secondary)' : 'var(--color-text-muted)' }"
+                    ></i>
+                  </li>
+                </div>
+
+                <div 
+                  v-if="isSectionOpen(item)" 
                   :class="[
-                    'relative flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors',
-                    isSectionActive(item)
-                      ? 'bg-blue-50 dark:bg-blue-500/30 text-primary-DEFAULT border-l-[3px] border-blue-600 dark:border-blue-500 pl-[9px]'
-                      : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-white',
+                    collapsed ? 'mt-1' : 'mt-1 ml-3 pl-2',
+                    !item.isTimeline && !collapsed ? 'border-l border-gray-200 dark:border-gray-800' : ''
                   ]"
                 >
-                  <i class="fa-solid w-5 text-center" :class="item.icon"></i>
-                  <span v-if="!collapsed" class="text-sm font-medium whitespace-nowrap transition-all duration-300">
-                    {{ item.label }}
-                  </span>
-                  <i
-                    v-if="!collapsed"
-                    class="fa-solid fa-chevron-down text-[12px] ml-auto transition-transform duration-200"
-                    :class="{ 'rotate-180': isSectionOpen(item) }"
-                    :style="{ color: isSectionActive(item) ? 'var(--color-text-secondary)' : 'var(--color-text-muted)' }"
-                  ></i>
-                </li>
-              </div>
-
-              <div 
-                v-if="isSectionOpen(item)" 
-                :class="[
-                  collapsed ? 'mt-1' : 'mt-1 ml-3 pl-2',
-                  !item.isTimeline && !collapsed ? 'border-l border-gray-200 dark:border-gray-800' : ''
-                ]"
-              >
-                <div
-                  v-for="(child, index) in item.children"
-                  :key="child.id"
-                  @click="selectItem(child)"
-                >
-                  <AdminMenuItem
-                    :icon="child.icon"
-                    :label="child.label"
-                    :active="props.activeItemId === child.id"
-                    :collapsed="collapsed"
-                    :isStep="item.isTimeline"
-                    :isFirstStep="index === 0"
-                    :isLastStep="index === item.children.length - 1"
-                  />
+                  <div
+                    v-for="(child, index) in item.children"
+                    :key="child.id"
+                    @click="selectItem(child)"
+                  >
+                    <AdminMenuItem
+                      :icon="child.icon"
+                      :label="child.label"
+                      :active="props.activeItemId === child.id"
+                      :collapsed="collapsed"
+                      :isStep="item.isTimeline"
+                      :isFirstStep="index === 0"
+                      :isLastStep="index === item.children.length - 1"
+                    />
+                  </div>
                 </div>
               </div>
+              <div v-else @click="selectItem(item)">
+                <AdminMenuItem
+                  :icon="item.icon"
+                  :label="item.label"
+                  :active="props.activeItemId === item.id"
+                  :collapsed="collapsed"
+                />
+              </div>
             </div>
-            <div v-else @click="selectItem(item)">
-              <AdminMenuItem
-                :icon="item.icon"
-                :label="item.label"
-                :active="props.activeItemId === item.id"
-                :collapsed="collapsed"
-              />
-            </div>
-          </div>
         </AdminMenuGroup>
+        </div>
       </div>
     </div>
 
     <!-- User Profile Footer -->
-    <div class="mt-auto px-2 pb-2">
-      <div 
-        class="flex items-center gap-3 p-2 rounded-xl bg-gray-50 dark:bg-gray-900/50 border border-gray-100 dark:border-gray-800 transition-all duration-300"
-        :class="collapsed ? 'justify-center' : ''"
-      >
-        <div class="w-8 h-8 rounded-full bg-blue-600 flex-shrink-0 overflow-hidden flex items-center justify-center">
-          <img v-if="auth.profileImage" :src="auth.profileImage" class="w-full h-full object-cover" />
-          <span v-else class="text-[12px] font-bold text-white">
-            {{ (auth.user?.fullname || 'U').charAt(0) }}
-          </span>
-        </div>
-        <div v-if="!collapsed" class="flex flex-col min-w-0">
-          <span class="text-[12px] font-semibold text-gray-900 dark:text-white truncate">
-            {{ auth.user?.fullname || 'ผู้ใช้งาน' }}
-          </span>
-          <span class="text-[10px] text-gray-500 dark:text-gray-400 truncate">
-            {{ auth.user?.position || auth.user?.role || '-' }}
-          </span>
+    <div class="shrink-0 pt-3">
+      <div class="px-2 pb-2">
+        <div 
+          class="flex items-center gap-3 p-2 rounded-xl bg-gray-50 dark:bg-gray-900/50 border border-gray-100 dark:border-gray-800 transition-all duration-300"
+          :class="collapsed ? 'justify-center' : ''"
+        >
+          <div class="w-8 h-8 rounded-full bg-blue-600 flex-shrink-0 overflow-hidden flex items-center justify-center">
+            <img v-if="auth.profileImage" :src="auth.profileImage" class="w-full h-full object-cover" />
+            <span v-else class="text-[12px] font-bold text-white">
+              {{ (auth.user?.fullname || 'U').charAt(0) }}
+            </span>
+          </div>
+          <div v-if="!collapsed" class="flex flex-col min-w-0">
+            <span class="text-[12px] font-semibold text-gray-900 dark:text-white truncate">
+              {{ auth.user?.fullname || 'ผู้ใช้งาน' }}
+            </span>
+            <span class="text-[10px] text-gray-500 dark:text-gray-400 truncate">
+              {{ auth.user?.position || auth.user?.role || '-' }}
+            </span>
+          </div>
         </div>
       </div>
-    </div>
-
-    <div
-      class="border-t border-gray-200 dark:border-gray-800 pt-3 px-3 text-[10px] text-center text-gray-500 dark:text-gray-400"
-    >
-      <span v-if="!collapsed">พัฒนาโดย DMIS</span>
+  
+      <div
+        class="border-t border-gray-200 dark:border-gray-800 pt-3 px-3 text-[10px] text-center text-gray-500 dark:text-gray-400"
+      >
+        <span v-if="!collapsed">พัฒนาโดย DMIS</span>
+      </div>
     </div>
     </aside>
   </div>
 </template>
+
+<style scoped>
+.sidebar-menu-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.7) transparent;
+}
+
+.sidebar-menu-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sidebar-menu-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-menu-scroll::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.7);
+  border-radius: 9999px;
+}
+
+.sidebar-menu-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.85);
+}
+</style>

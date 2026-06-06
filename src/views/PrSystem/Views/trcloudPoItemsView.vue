@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useTrcloudStore } from '@/stores/trcloud'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
+import { useTrackingStatus } from '@/composables/useTrackingStatus'
 
 const trcloudStore = useTrcloudStore()
 const auth = useAuthStore()
@@ -21,6 +22,9 @@ const TRACK_TABLE = 'trcloud_tracking'
 const TRACK_DOC_TYPE = 'po'
 const trackedRowIds = ref(loadTrackedRowIds())
 const sortingTrackedIds = ref([...trackedRowIds.value])
+
+// สถานะการจัดการ: PO item ส่งเข้าได้ทั้งฝั่ง AP และ EXP → รวมทั้งสองแหล่ง
+const { load: loadTrackingStatus, isAdded: isAddedToTracking, isLineSent } = useTrackingStatus()
 
 function calculateAge(dateStr) {
   if (!dateStr) return 0
@@ -384,6 +388,7 @@ watch(viewMode, () => {
 
 onMounted(async () => {
   loadTrackedRowIdsFromCloud()
+  loadTrackingStatus(['ap', 'exp'])
   if (!trcloudStore.poRows.length) {
     await refreshPoItemRows()
   } else {
@@ -551,7 +556,7 @@ onMounted(async () => {
             <tr v-else-if="!filteredRows.length">
               <td colspan="15" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบรายการ PO รายการสินค้า</td>
             </tr>
-            <tr v-for="(row, index) in filteredRows" :key="getRowIdentity(row)" class="dark:hover:bg-gray-200/50 hover:bg-blue-100/50 transition-colors" style="border-bottom: 1px solid var(--color-border)">
+            <tr v-for="(row, index) in filteredRows" :key="getRowIdentity(row)" class="dark:hover:bg-gray-200/50 hover:bg-blue-100/50 transition-colors" :style="{ borderBottom: '1px solid var(--color-border)', ...(isAddedToTracking(row) ? { boxShadow: 'inset 3px 0 0 #16a34a', background: 'rgba(16,185,129,0.06)' } : {}) }">
               <td class="px-4 py-3 text-center relative" style="border-right: 1px solid var(--color-border)">
                 <div v-if="showSelection">
                   <input 
@@ -594,7 +599,15 @@ onMounted(async () => {
               </td>
               <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary)">{{ row.organization || '-' }}</td>
               <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary)">{{ row.staff || '-' }}</td>
-              <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary)">{{ row.item_name || '-' }}</td>
+              <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary)">
+                {{ row.item_name || '-' }}
+                <span v-if="isAddedToTracking(row)" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold align-middle" style="background: rgba(16,185,129,0.15); color: #16a34a">
+                  <i class="fa-solid fa-circle-check"></i> เข้าตารางแล้ว
+                </span>
+                <span v-if="isLineSent(row)" class="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold align-middle" style="background: rgba(6,182,212,0.15); color: #0891b2">
+                  <i class="fa-brands fa-line"></i> ส่ง LINE แล้ว
+                </span>
+              </td>
               <td class="px-4 py-3" style="color: var(--color-text-primary)">{{ row.quantity || '-' }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary)">{{ row.unit || '-' }}</td>
               <td class="px-4 py-3 font-mono" style="color: var(--color-text-primary)">{{ Number(row.price || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</td>

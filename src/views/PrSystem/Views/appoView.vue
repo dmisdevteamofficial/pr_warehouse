@@ -4,6 +4,7 @@ import { supabase, supabaseEmployee } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { useTrcloudStore } from '@/stores/trcloud'
 import { useUiStore } from '@/stores/ui'
+import { buildSourceKey, trcloudItemKeys, isMissingTrackingSchema, stripTrackingFields } from '@/utils/trackingSync'
 import Swal from 'sweetalert2'
 
 const auth = useAuthStore()
@@ -33,10 +34,15 @@ let apSearchTimer = null
 const apInfoLoading = ref(false)
 const apInfoError = ref('')
 const apInfo = ref(null)
+const lastAutofillSourceKey = ref('') // source_key ของรายการ TRCloud ที่เพิ่ง autofill
 const expandedRowIds = ref([])
 const showAddedTable = ref(false)
 const addedTableRef = ref(null)
+const formCardRef = ref(null)
 const editingTmpId = ref(null) // ID ของรายการในตารางชั่วคราวที่กำลังแก้ไข
+const editingOriginalRow = ref(null) // สำเนาค่ารายการเดิมที่กำลังแก้ไข (ใช้ตรวจว่าช่องไหนถูกเปลี่ยน)
+// ช่องที่ "เลือก/กรอกเอง" และมักเหมือนกันทั้งล็อต → แก้ช่องไหน เปลี่ยนทุกรายการในลิสต์ช่องนั้น
+const PROPAGATE_FIELDS = ['option_name', 'currency_name', 'ap_status', 'department', 'date_transfer', 'desired_date', 'remark']
 
 async function fetchUrgentOptions() {
   try {
@@ -149,13 +155,40 @@ function toggleRowExpanded(id) {
   expandedRowIds.value = Array.from(next)
 }
 
+function getLayoutScrollContainer(target) {
+  if (typeof document === 'undefined') return null
+  const closestMain = target instanceof HTMLElement ? target.closest('main') : null
+  if (closestMain instanceof HTMLElement) return closestMain
+  const fallbackMain = document.querySelector('main')
+  return fallbackMain instanceof HTMLElement ? fallbackMain : null
+}
+
+function scrollWithinLayout(target) {
+  if (!(target instanceof HTMLElement)) return
+  const container = getLayoutScrollContainer(target)
+
+  if (!container) {
+    try {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    } catch {
+    }
+    return
+  }
+
+  const containerRect = container.getBoundingClientRect()
+  const targetRect = target.getBoundingClientRect()
+  const nextTop = container.scrollTop + (targetRect.top - containerRect.top) - 16
+
+  container.scrollTo({
+    top: Math.max(0, nextTop),
+    behavior: 'smooth'
+  })
+}
+
 function scrollToAddedTable() {
   const el = addedTableRef.value
   if (!el) return
-  try {
-    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  } catch {
-  }
+  scrollWithinLayout(el)
 }
 
 function userNameText(u) {
@@ -167,6 +200,7 @@ async function fetchApAutofill(apIdentity) {
   const identity = String(apIdentity || '').trim()
   apInfoError.value = ''
   apInfo.value = null
+  lastAutofillSourceKey.value = ''
   if (!identity) return
 
   apInfoLoading.value = true
@@ -201,6 +235,7 @@ async function fetchApAutofill(apIdentity) {
 
     if (trcloudItem) {
       console.log('Found TRCloud Item:', trcloudItem)
+      lastAutofillSourceKey.value = trcloudItemKeys(trcloudItem).source_key
       const poDateIso = isoDateFromAny(trcloudItem.issue_date)
       
       // 1. เลขที่ AP (จากหน้า trcloudApItemsView.vue ตาราง เลขที่เอกสาร)
@@ -488,10 +523,15 @@ async function handleAutofill(val) {
       qty_received: form.value.qty_received === null || form.value.qty_received === '' ? null : Number(form.value.qty_received),
       desired_date: form.value.desired_date || null,
       remark: (form.value.remark || '').trim() || null,
+      source_key: lastAutofillSourceKey.value || buildSourceKey(
+        (form.value.ap_number || '').trim() || (form.value.po_id || '').trim(),
+        form.value.item_ref,
+        form.value.qty_order
+      ),
       _qty_auto_preview: qtyAutoPreview.value,
     }
 
-    // ตรวจสอบซ้ำใน DB เพื่อแสดงสีแดง
+    // ตรวจสอบซ้ำใน DB เพื่อแสดงสีแดง (มีอยู่แล้ว = ตอนบันทึกจะอัปเดตทับ)
     const isDbDuplicate = await checkDuplicateInDatabase(payload)
     payload._is_duplicate = isDbDuplicate
 
@@ -514,13 +554,11 @@ function formatNumber(value) {
 
 async function checkDuplicateInDatabase(payload) {
   try {
+    if (!payload.source_key) return false
     const { data, error } = await supabase
       .from('ap_requests')
       .select('id')
-      .eq('ap_number', payload.ap_number)
-      .eq('item_ref', payload.item_ref)
-      .eq('po_id', payload.po_id)
-      .eq('po_date', payload.po_date)
+      .eq('source_key', payload.source_key)
       .maybeSingle()
 
     if (error) throw error
@@ -557,15 +595,17 @@ async function addRow() {
     qty_received: form.value.qty_received === null || form.value.qty_received === '' ? null : Number(form.value.qty_received),
     desired_date: form.value.desired_date || null,
     remark: (form.value.remark || '').trim() || null,
+    source_key: buildSourceKey(
+      (form.value.ap_number || '').trim() || (form.value.po_id || '').trim(),
+      form.value.item_ref,
+      form.value.qty_order
+    ),
     _qty_auto_preview: qtyAutoPreview.value,
   }
 
-  // Check duplicate in temporary table (local rows)
-  const isLocalDuplicate = rows.value.some(r => 
-    r.ap_number === payload.ap_number &&
-    r.item_ref === payload.item_ref &&
-    r.po_id === payload.po_id &&
-    r.po_date === payload.po_date &&
+  // Check duplicate in temporary table (local rows) — เทียบด้วย source_key
+  const isLocalDuplicate = rows.value.some(r =>
+    r.source_key === payload.source_key &&
     r._tmp_id !== editingTmpId.value
   )
 
@@ -586,7 +626,18 @@ async function addRow() {
     if (index !== -1) {
       rows.value[index] = { ...rows.value[index], ...payload }
     }
+    // ช่องที่ "เลือก/กรอกเอง" ช่องไหนถูกเปลี่ยนตอนแก้ไข → เปลี่ยนให้ทุกรายการในลิสต์เหมือนกัน
+    const orig = editingOriginalRow.value || {}
+    const propagatePatch = {}
+    for (const f of PROPAGATE_FIELDS) {
+      if ((payload[f] ?? '') !== (orig[f] ?? '')) propagatePatch[f] = payload[f]
+    }
+    if (Object.keys(propagatePatch).length) {
+      rows.value = rows.value.map(r => ({ ...r, ...propagatePatch }))
+      ui.showToast('อัปเดตค่าที่เปลี่ยนให้ทุกรายการในลิสต์แล้ว', 'success')
+    }
     editingTmpId.value = null
+    editingOriginalRow.value = null
   } else {
     // เพิ่มรายการใหม่
     rows.value = [{ _tmp_id: crypto.randomUUID(), ...payload }, ...(rows.value || [])]
@@ -600,6 +651,7 @@ async function addRow() {
 
 function editTmpRow(row) {
   editingTmpId.value = row._tmp_id
+  editingOriginalRow.value = { ...row }
   form.value = {
     ap_number: row.ap_number || '',
     po_id: row.po_id || '',
@@ -620,11 +672,12 @@ function editTmpRow(row) {
   }
   apSearchText.value = form.value.ap_number
   // เลื่อนไปที่ฟอร์มด้านบน
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  scrollWithinLayout(formCardRef.value)
 }
 
 function cancelTmpEdit() {
   editingTmpId.value = null
+  editingOriginalRow.value = null
   resetForm(false)
 }
 
@@ -742,23 +795,28 @@ async function submitEdit() {
       qty_received: form.value.qty_received === null || form.value.qty_received === '' ? null : Number(form.value.qty_received),
       desired_date: form.value.desired_date || null,
       remark: (form.value.remark || '').trim() || null,
+      source_key: buildSourceKey(
+        (form.value.ap_number || '').trim() || (form.value.po_id || '').trim(),
+        form.value.item_ref,
+        form.value.qty_order
+      ),
+      is_orphaned: false,
+      orphaned_at: null,
       updated_by: updatedBy,
       updated_at: new Date().toISOString(),
     }
 
-    // Check duplicate in database (excluding current row)
+    // Check duplicate in database (excluding current row) — เทียบด้วย source_key
     const { data: dupData, error: dupError } = await supabase
       .from('ap_requests')
       .select('id')
-      .eq('ap_number', payload.ap_number)
-      .eq('item_ref', payload.item_ref)
-      .eq('po_id', payload.po_id)
-      .eq('po_date', payload.po_date)
+      .eq('source_key', payload.source_key)
       .neq('id', editRowId.value)
       .maybeSingle()
 
-    if (dupError) throw dupError
-    if (dupData) {
+    // ถ้ายังไม่ได้รัน SQL (ไม่มีคอลัมน์ source_key) → ข้ามการเช็คซ้ำแบบ source_key
+    if (dupError && !isMissingTrackingSchema(dupError)) throw dupError
+    if (!dupError && dupData) {
       await Swal.fire({
         title: 'พบข้อมูลซ้ำในระบบ',
         text: 'ไม่สามารถบันทึกได้ เนื่องจากมีข้อมูลรายการนี้ในระบบแล้ว (เลขที่ AP, เลขที่ PO, วันที่ และรายการ ซ้ำ)',
@@ -771,7 +829,14 @@ async function submitEdit() {
     }
 
     const { error } = await supabase.from('ap_requests').update(payload).eq('id', editRowId.value)
-    if (error) throw error
+    if (error) {
+      if (isMissingTrackingSchema(error)) {
+        const { error: e2 } = await supabase.from('ap_requests').update(stripTrackingFields(payload)).eq('id', editRowId.value)
+        if (e2) throw e2
+      } else {
+        throw error
+      }
+    }
 
     editMode.value = false
     editRowId.value = null
@@ -799,59 +864,60 @@ async function submitAll() {
   }
   saving.value = true
   try {
-    const duplicates = []
-    
-    // 1. ตรวจสอบข้อมูลซ้ำในฐานข้อมูล
-    for (const r of rows.value) {
-      const exists = await checkDuplicateInDatabase(r)
-      if (exists) {
-        duplicates.push(`- ${r.ap_number || r.po_id || 'ไม่ระบุ'} : ${r.item_ref || 'ไม่ระบุรายการ'}`)
-      }
-    }
-
-    if (duplicates.length > 0) {
-      await Swal.fire({
-        title: 'พบข้อมูลซ้ำในระบบ',
-        html: `<div class="text-left mt-2">รายการต่อไปนี้มีอยู่ในฐานข้อมูลแล้ว:<br><br>${duplicates.join('<br>')}</div>`,
-        icon: 'warning',
-        confirmButtonText: 'ตกลง',
-        confirmButtonColor: '#3085d6',
-      })
-      saving.value = false
-      return
-    }
-
     const createdBy = createdByText()
-    const payload = (rows.value || []).map((r) => ({
-      ap_number: r.ap_number ?? null,
-      po_id: r.po_id ?? null,
-      po_date: r.po_date ?? null,
-      supplier_name: r.supplier_name ?? null,
-      item_ref: r.item_ref ?? null,
-      qty_order: r.qty_order ?? null,
-      department: r.department ?? null,
-      po_created_by: r.po_created_by ?? null,
-      date_transfer: r.date_transfer ?? null,
-      option_name: r.option_name ?? null,
-      total_price: r.total_price ?? null,
-      currency_name: r.currency_name || 'LAK',
-      ap_status: r.ap_status ?? null,
-      qty_received: r.qty_received ?? null,
-      desired_date: r.desired_date ?? null,
-      remark: r.remark ?? null,
-      amount_received: r.amount_received ?? null,
-      amount_balance: r.amount_balance ?? null,
-      created_by: createdBy,
-      updated_by: createdBy,
-      updated_at: new Date().toISOString(),
-    }))
+    const nowIso = new Date().toISOString()
+    // กันซ้ำภายในล็อตที่ส่ง (source_key เดียวกัน เก็บตัวล่าสุด)
+    const byKey = new Map()
+    for (const r of rows.value || []) {
+      byKey.set(r.source_key, {
+        ap_number: r.ap_number ?? null,
+        po_id: r.po_id ?? null,
+        po_date: r.po_date ?? null,
+        supplier_name: r.supplier_name ?? null,
+        item_ref: r.item_ref ?? null,
+        qty_order: r.qty_order ?? null,
+        department: r.department ?? null,
+        po_created_by: r.po_created_by ?? null,
+        date_transfer: r.date_transfer ?? null,
+        option_name: r.option_name ?? null,
+        total_price: r.total_price ?? null,
+        currency_name: r.currency_name || 'LAK',
+        ap_status: r.ap_status ?? null,
+        qty_received: r.qty_received ?? null,
+        desired_date: r.desired_date ?? null,
+        remark: r.remark ?? null,
+        amount_received: r.amount_received ?? null,
+        amount_balance: r.amount_balance ?? null,
+        source_key: r.source_key,
+        is_orphaned: false, // ส่งเข้ามาใหม่ = ปลดธง orphan ถ้าเคยมี
+        orphaned_at: null,
+        created_by: createdBy,
+        updated_by: createdBy,
+        updated_at: nowIso,
+      })
+    }
+    const payload = Array.from(byKey.values())
 
-    const { error } = await supabase.from('ap_requests').insert(payload)
-    if (error) throw error
+    // upsert: ถ้า source_key ซ้ำใน DB จะอัปเดตทับด้วยชุดล่าสุด (กันซ้ำระดับฐานข้อมูล)
+    const { error } = await supabase
+      .from('ap_requests')
+      .upsert(payload, { onConflict: 'source_key' })
+    if (error) {
+      if (isMissingTrackingSchema(error)) {
+        // ยังไม่ได้รัน SQL migration → บันทึกแบบ legacy (ไม่มี source_key/กันซ้ำ)
+        const legacy = payload.map(stripTrackingFields)
+        const { error: e2 } = await supabase.from('ap_requests').insert(legacy)
+        if (e2) throw e2
+        ui.showToast('บันทึกแล้ว (โหมดทดสอบ: ยังไม่รัน SQL — กันซ้ำ/ป้าย/ซิงค์ยังไม่ทำงาน)', 'info', 5000)
+      } else {
+        throw error
+      }
+    } else {
+      ui.showToast('บันทึกข้อมูลสำเร็จ', 'success')
+    }
 
     rows.value = []
     resetForm(false)
-    ui.showToast('บันทึกข้อมูลสำเร็จ', 'success')
   } catch (err) {
     ui.showToast('บันทึกข้อมูลไม่สำเร็จ: ' + String(err?.message || err || 'เกิดข้อผิดพลาด'), 'error')
   } finally {
@@ -907,7 +973,7 @@ watch(
       </div>
     </div>
 
-    <div class="rounded-xl border p-4 md:p-6" style="background: var(--color-bg-card); border-color: var(--color-border)">
+    <div ref="formCardRef" class="rounded-xl border p-4 md:p-6" style="background: var(--color-bg-card); border-color: var(--color-border)">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div>
           <label class="text-[12px] font-medium" style="color: var(--color-text-muted)">เลขที่ AP</label>

@@ -2,9 +2,17 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { supabase } from '@/lib/supabase'
 import { useUiStore } from '@/stores/ui'
+import { useTrcloudStore } from '@/stores/trcloud'
+import { reconcile, isMissingTrackingSchema } from '@/utils/trackingSync'
 import Swal from 'sweetalert2'
 
 const ui = useUiStore()
+const trcloudStore = useTrcloudStore()
+const syncing = ref(false)
+const trackingSchemaReady = ref(true) // false = ยังไม่ได้รัน SQL migration (โหมด legacy)
+
+const ROW_COLS_FULL = 'id, ap_number, po_id, po_date, supplier_name, item_ref, qty_order, department, po_created_by, date_transfer, option_name, total_price, currency_name, ap_status, qty_received, qty_auto, desired_date, remark, amount_received, amount_balance, source_key, is_orphaned, created_by, updated_by, created_at, updated_at'
+const ROW_COLS_LEGACY = 'id, ap_number, po_id, po_date, supplier_name, item_ref, qty_order, department, po_created_by, date_transfer, option_name, total_price, currency_name, ap_status, qty_received, qty_auto, desired_date, remark, amount_received, amount_balance, created_by, updated_by, created_at, updated_at'
 const emit = defineEmits(['editRow'])
 const props = defineProps({
   refreshKey: { type: Number, default: 0 },
@@ -130,12 +138,21 @@ function matchDateRange(dateValue, fromIso, toIso) {
 async function fetchRows() {
   loading.value = true
   try {
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from('exp_requests')
-      .select(
-        'id, ap_number, po_id, po_date, supplier_name, item_ref, qty_order, department, po_created_by, date_transfer, option_name, total_price, currency_name, ap_status, qty_received, qty_auto, desired_date, remark, amount_received, amount_balance, created_by, updated_by, created_at, updated_at'
-      )
+      .select(ROW_COLS_FULL)
       .order('created_at', { ascending: false })
+
+    // ยังไม่ได้รัน SQL (ไม่มีคอลัมน์ source_key/is_orphaned) → โหลดแบบ legacy
+    if (error && isMissingTrackingSchema(error)) {
+      trackingSchemaReady.value = false
+      ;({ data, error } = await supabase
+        .from('exp_requests')
+        .select(ROW_COLS_LEGACY)
+        .order('created_at', { ascending: false }))
+    } else {
+      trackingSchemaReady.value = true
+    }
 
     if (error) throw error
     rows.value = data || []
@@ -154,6 +171,103 @@ watch(
     fetchRows()
   }
 )
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+}
+
+function rowLabel(r) {
+  return escapeHtml(`${r.ap_number || r.po_id || '-'} : ${r.item_ref || '-'} (qty ${r.qty_order ?? '-'})`)
+}
+
+function buildSyncPreviewHtml(plan) {
+  const { stats } = plan
+  const section = (title, color, items) => {
+    if (!items.length) return ''
+    const lines = items.slice(0, 8).map((t) => `<li>${t}</li>`).join('')
+    const more = items.length > 8 ? `<li>… และอีก ${items.length - 8} รายการ</li>` : ''
+    return `<div class="mt-2"><div style="color:${color};font-weight:600">${title} (${items.length})</div><ul style="text-align:left;padding-left:18px;list-style:disc">${lines}${more}</ul></div>`
+  }
+  return [
+    `<div style="text-align:left">`,
+    `<div>รีเฟรชให้ตรง TRCloud: <b>${stats.refresh}</b> • ย้ายงานมือ: <b>${stats.migrate}</b> • ตัดออก: <b style="color:#ef4444">${stats.cut}</b> • ติดธงหลุด: <b style="color:#f59e0b">${stats.orphan}</b></div>`,
+    section('จะตัดออก', '#ef4444', plan.cut.map(rowLabel)),
+    section('ย้ายงานมือไปบรรทัดที่ตรง TRCloud', '#16a34a', plan.migrate.map((m) => `${rowLabel(m.from)} → ${rowLabel(m.to)}`)),
+    section('หลุดจาก TRCloud (ติดธง ไม่ลบ)', '#f59e0b', plan.orphan.map(rowLabel)),
+    `</div>`,
+  ].join('')
+}
+
+async function applyReconcile(plan) {
+  const nowIso = new Date().toISOString()
+  const byId = new Map()
+  const addPatch = (id, patch) => byId.set(id, { ...(byId.get(id) || {}), ...patch })
+  for (const { row, patch } of plan.refresh) addPatch(row.id, patch)
+  for (const { to, patch } of plan.migrate) if (Object.keys(patch).length) addPatch(to.id, patch)
+
+  const updates = Array.from(byId.entries()).map(([id, patch]) => ({ id, patch: { ...patch, updated_at: nowIso } }))
+  for (let i = 0; i < updates.length; i += 10) {
+    await Promise.all(updates.slice(i, i + 10).map((u) => supabase.from('exp_requests').update(u.patch).eq('id', u.id)))
+  }
+
+  const cutIds = plan.cut.map((r) => r.id)
+  if (cutIds.length) {
+    const { error } = await supabase.from('exp_requests').delete().in('id', cutIds)
+    if (error) throw error
+  }
+
+  const orphanIds = plan.orphan.map((r) => r.id)
+  if (orphanIds.length) {
+    const { error } = await supabase.from('exp_requests').update({ is_orphaned: true, orphaned_at: nowIso }).in('id', orphanIds)
+    if (error) throw error
+  }
+}
+
+async function syncWithTrcloud() {
+  if (!trackingSchemaReady.value) {
+    Swal.fire('ยังใช้ซิงค์ไม่ได้', 'ต้องรัน SQL migration (เพิ่มคอลัมน์ source_key) ก่อนจึงจะซิงค์กับ TRCloud ได้', 'info')
+    return
+  }
+  syncing.value = true
+  try {
+    if (!trcloudStore.expenseItemRows.length) {
+      await trcloudStore.fetchTrcloudData('expense')
+    }
+    if (!trcloudStore.expenseItemRows.length) {
+      ui.showToast('ยังไม่มีข้อมูล TRCloud ให้เทียบ (ตรวจสอบ cookie/ช่วงวันที่)', 'warning')
+      return
+    }
+
+    const plan = reconcile(trcloudStore.expenseItemRows, rows.value, { includeStatus: false })
+    const { stats } = plan
+    if (!stats.refresh && !stats.migrate && !stats.cut && !stats.orphan) {
+      Swal.fire('ตรงกับ TRCloud อยู่แล้ว', 'ไม่มีรายการต้องปรับ', 'success')
+      return
+    }
+
+    const res = await Swal.fire({
+      title: 'ยืนยันการซิงค์กับ TRCloud',
+      html: buildSyncPreviewHtml(plan),
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonText: 'ยืนยันซิงค์',
+      cancelButtonText: 'ยกเลิก',
+      confirmButtonColor: '#2563eb',
+      width: 560,
+    })
+    if (!res.isConfirmed) return
+
+    loading.value = true
+    await applyReconcile(plan)
+    ui.showToast('ซิงค์กับ TRCloud สำเร็จ', 'success')
+    await fetchRows()
+  } catch (err) {
+    Swal.fire('เกิดข้อผิดพลาด', getErrorText(err), 'error')
+  } finally {
+    loading.value = false
+    syncing.value = false
+  }
+}
 
 const filteredRows = computed(() => {
   const key = searchText.value.trim().toLowerCase()
@@ -376,6 +490,16 @@ const currencyTotals = computed(() => {
           <h1 class="text-[20px] font-semibold" style="color: var(--color-text-primary)">ตารางติดตาม Exp</h1>
           <p class="text-[13px] mt-0.5" style="color: var(--color-text-muted)">ข้อมูลจากตาราง exp_requests</p>
         </div>
+        <button
+          type="button"
+          :disabled="syncing || loading"
+          @click="syncWithTrcloud"
+          class="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-sm flex items-center gap-2 disabled:opacity-50"
+          title="เทียบกับ TRCloud แล้วรีเฟรช/ตัดรายการที่ไม่ตรง"
+        >
+          <i class="fa-solid fa-rotate" :class="{ 'fa-spin': syncing }"></i>
+          ซิงค์กับ TRCloud
+        </button>
         <div class="relative group">
           <button
             type="button"
@@ -615,7 +739,7 @@ const currencyTotals = computed(() => {
               :key="r.id"
               class="border-b last:border-b-0 hover:bg-gray-50 dark:hover:bg-slate-700/30 transition-colors"
               :class="{ 'bg-blue-50/50': selectedIds.includes(r.id) }"
-              style="border-color: var(--color-border)"
+              :style="{ borderColor: 'var(--color-border)', ...(r.is_orphaned ? { boxShadow: 'inset 3px 0 0 #f59e0b', background: 'rgba(245,158,11,0.07)' } : {}) }"
             >
               <td v-if="selectionMode" class="px-4 py-3 text-center align-top">
                 <input
@@ -629,6 +753,9 @@ const currencyTotals = computed(() => {
                 <div class="font-semibold" style="color: #2563eb">AP(Exp): {{ r.ap_number || '-' }}</div>
                 <div class="font-medium" style="color: var(--color-text-primary)">PO: {{ r.po_id || '-' }}</div>
                 <div class="text-[12px]" style="color: var(--color-text-muted)">{{ formatThaiDate(r.po_date) }}</div>
+                <span v-if="r.is_orphaned" class="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold" style="background: rgba(245,158,11,0.15); color: #b45309" title="ไม่พบรายการนี้ใน TRCloud แล้ว แต่มีงานมือ จึงไม่ถูกลบ">
+                  <i class="fa-solid fa-triangle-exclamation"></i> หลุดจาก TRCloud
+                </span>
               </td>
               <td class="px-4 py-3 align-top" style="color: var(--color-text-primary)">
                 <div
