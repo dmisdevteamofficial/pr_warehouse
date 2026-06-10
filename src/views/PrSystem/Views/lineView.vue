@@ -15,6 +15,7 @@ const loading = ref(true)
 const rows = ref([])
 const searchText = ref('')
 const viewMode = ref('pay') // pay | slip
+const copyFilter = ref('uncopied') // uncopied | all
 const selectedRowIds = ref([]) // Array of selected row IDs
 const editableText = ref('')
 const messageDirty = ref(false)
@@ -151,7 +152,12 @@ onMounted(() => {
 // ---- filtered rows ----
 const filteredRows = computed(() => {
   const key = searchText.value.trim().toLowerCase()
-  const list = rows.value || []
+  let list = rows.value || []
+
+  if (copyFilter.value === 'uncopied') {
+    list = list.filter((r) => !currentModeStatus.value[r.id]?.copiedAt)
+  }
+
   if (!key) return list
   return list.filter((r) => {
     const haystack = [r.ap_number, r.po_id, r.supplier_name, r.item_ref, r.option_name]
@@ -207,6 +213,26 @@ function selectRow(id) {
 
 // status ของ mode ปัจจุบัน
 const currentModeStatus = computed(() => statusByMode.value[viewMode.value] || {})
+
+const visibleRowCount = computed(() => {
+  if (copyFilter.value === 'all') return (rows.value || []).length
+  return (rows.value || []).filter((r) => !currentModeStatus.value[r.id]?.copiedAt).length
+})
+
+function setViewMode(mode) {
+  viewMode.value = mode
+  selectedRowIds.value = []
+  messageDirty.value = false
+  editableText.value = ''
+  fetchRows()
+}
+
+function setCopyFilter(mode) {
+  copyFilter.value = mode
+  selectedRowIds.value = []
+  messageDirty.value = false
+  editableText.value = ''
+}
 
 // ---- message builders ----
 function urgentTag(optionName) {
@@ -627,7 +653,7 @@ async function markReadRow(r) {
             class="px-3 py-1.5 rounded-full text-[12px] font-medium border transition-all"
             :class="viewMode === 'pay' ? 'bg-blue-600 text-white' : 'hover:bg-gray-50'"
             :style="viewMode === 'pay' ? { borderColor: '#2563eb' } : { borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }"
-            @click="viewMode = 'pay'; selectedRowIds = []; messageDirty = false; editableText = ''; fetchRows()"
+            @click="setViewMode('pay')"
           >
             ยังไม่ชำระ ({{ countsLoading ? '-' : statusCounts.pay }})
           </button>
@@ -636,10 +662,34 @@ async function markReadRow(r) {
             class="px-3 py-1.5 rounded-full text-[12px] font-medium border transition-all"
             :class="viewMode === 'slip' ? 'bg-blue-600 text-white' : 'hover:bg-gray-50'"
             :style="viewMode === 'slip' ? { borderColor: '#2563eb' } : { borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }"
-            @click="viewMode = 'slip'; selectedRowIds = []; messageDirty = false; editableText = ''; fetchRows()"
+            @click="setViewMode('slip')"
           >
             ชำระแล้ว ({{ countsLoading ? '-' : (statusCounts.paid + statusCounts.pay) }})
           </button>
+        </div>
+        <div class="mt-2 flex items-center gap-2">
+          <span class="text-[12px] font-medium" style="color: var(--color-text-muted)">สถานะคัดลอก:</span>
+          <button
+            type="button"
+            class="px-3 py-1.5 rounded-full text-[12px] font-medium border transition-all"
+            :class="copyFilter === 'uncopied' ? 'bg-blue-600 text-white' : 'hover:bg-gray-50'"
+            :style="copyFilter === 'uncopied' ? { borderColor: '#2563eb' } : { borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }"
+            @click="setCopyFilter('uncopied')"
+          >
+            ยังไม่ได้คัดลอก
+          </button>
+          <button
+            type="button"
+            class="px-3 py-1.5 rounded-full text-[12px] font-medium border transition-all"
+            :class="copyFilter === 'all' ? 'bg-blue-600 text-white' : 'hover:bg-gray-50'"
+            :style="copyFilter === 'all' ? { borderColor: '#2563eb' } : { borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }"
+            @click="setCopyFilter('all')"
+          >
+            ทั้งหมด
+          </button>
+          <span class="text-[12px]" style="color: var(--color-text-muted)">
+            {{ formatNumber(visibleRowCount) }} รายการ
+          </span>
         </div>
       </div>
       <button

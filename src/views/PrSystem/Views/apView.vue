@@ -417,12 +417,12 @@ function getDisplayBadgeInfo(row) {
           <thead>
             <tr style="background: var(--color-bg-body); border-bottom: 1px solid var(--color-border)">
               <th class="px-4 py-3 text-left font-medium w-[130px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">เลขที่เอกสาร</th>
-              <th class="px-4 py-3 text-left font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่</th>
-              <th class="px-4 py-3 text-left font-medium w-[90px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อายุเอกสาร</th>
-              <th class="px-4 py-3 text-left font-medium min-w-[180px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ผู้ขาย/หน่วยงาน</th>
-              <th class="px-4 py-3 text-left font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">Staff</th>
+              <th class="px-4 py-3 text-left font-medium w-[110px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่</th>
+              <th class="px-4 py-3 text-left font-medium w-[70px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อายุเอกสาร</th>
+              <th class="px-4 py-3 text-left font-medium min-w-[160px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ผู้ขาย/หน่วยงาน</th>
+              <th class="px-4 py-3 text-left font-medium w-[160px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">Staff</th>
               <th class="px-4 py-3 text-left font-medium w-[110px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิง PO</th>
-              <th class="px-4 py-3 text-left font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ครบกำหนด</th>
+              <th class="px-4 py-3 text-left font-medium w-[110px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ครบกำหนด</th>
               <th class="px-4 py-3 text-right font-medium w-[110px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">มูลค่า</th>
               <th class="px-4 py-3 text-left font-medium w-[110px]" style="color: var(--color-text-muted)">การชำระ</th>
               <th class="px-4 py-3 text-center font-medium w-[70px]" style="color: var(--color-text-muted)">ติดตาม</th>

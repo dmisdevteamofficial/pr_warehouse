@@ -233,8 +233,18 @@ watch(() => trcloudStore.expenseItemRows, () => {
 
 function getIdentityString(row) {
   const doc = row.doc_number || row.invoice_number || '-'
-  const item = row.item_name || '-'
+  const item = row.invoice_note || row.item_name || '-'
   return `${doc} | ${item} [EXP]`
+}
+
+function goToDocumentDetail(docNumber) {
+  if (!docNumber || docNumber === '-') return;
+  
+  emit('selectPage', {
+    itemId: "/#/document_detail",
+    itemLabel: `รายละเอียดเอกสาร ${docNumber}`,
+    docNumber: docNumber
+  });
 }
 
 function sendToExp(rows) {
@@ -438,12 +448,13 @@ onMounted(() => {
                   </div>
                 </div>
               </th>
-              <th class="px-4 py-3 font-medium w-[130px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">เลขexp</th>
-              <th class="px-4 py-3 font-medium w-[130px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิง PO</th>
-              <th class="px-4 py-3 font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่</th>
-              <th class="px-4 py-3 font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อายุ (วัน)</th>
+              <th class="px-4 py-3 font-medium w-[130px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">เลขexp-po</th>
+              <!-- <th class="px-4 py-3 font-medium w-[130px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิง PO</th> -->
+              <th class="px-4 py-3 font-medium w-[110px] text-center" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่-อายุ</th>
+              <!-- <th class="px-4 py-3 font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อายุ (วัน)</th> -->
               <th class="px-4 py-3 font-medium w-[200px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">คู่ค้า</th>
-              <th class="px-4 py-3 font-medium min-w-[200px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">รายการสินค้า / คำอธิบาย</th>
+              <th class="px-4 py-3 font-medium w-[170px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">โครงการ</th>
+              <th class="px-4 py-3 font-medium min-w-[190px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">รายการสินค้า / คำอธิบาย</th>
               <th class="px-4 py-3 font-medium w-[110px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ยอดที่ชำระ</th>
               <th class="px-4 py-3 font-medium text-center w-[70px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ติดตาม</th>
               <th class="px-4 py-3 font-medium w-[120px]" style="color: var(--color-text-muted)">สถานะ</th>
@@ -451,7 +462,7 @@ onMounted(() => {
           </thead>
           <tbody>
             <tr v-if="loading">
-              <td colspan="10" class="px-4 py-12 text-center">
+              <td colspan="11" class="px-4 py-12 text-center">
                 <div class="flex flex-col items-center gap-2">
                   <i class="fa-solid fa-circle-notch fa-spin text-2xl text-blue-500"></i>
                   <span style="color: var(--color-text-muted)">กำลังดึงข้อมูลจาก TRCLOUD...</span>
@@ -459,7 +470,7 @@ onMounted(() => {
               </td>
             </tr>
             <tr v-else-if="!filteredRows.length">
-              <td colspan="10" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบรายการ EXP รายการสินค้า</td>
+              <td colspan="11" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบรายการ EXP รายการสินค้า</td>
             </tr>
             <tr v-for="(row, index) in filteredRows" :key="getRowIdentity(row)" class="dark:hover:bg-gray-200/50 hover:bg-blue-100/50 transition-colors" :style="{ borderBottom: '1px solid var(--color-border)', ...(isAddedToTracking(row) ? { boxShadow: 'inset 3px 0 0 #16a34a', background: 'rgba(16,185,129,0.06)' } : {}) }">
               <td class="px-4 py-3 text-center relative" style="border-right: 1px solid var(--color-border)">
@@ -496,13 +507,23 @@ onMounted(() => {
                   </div>
                 </div>
               </td>
-              <td class="px-4 py-3 font-mono break-all" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ row.doc_number || '-' }}</td>
-              <td class="px-4 py-3 font-mono break-all" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ row.ref_po || '-' }}</td>
-              <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ row.issue_date || '-' }}</td>
-              <td class="px-4 py-3 font-mono" style="border-right: 1px solid var(--color-border)" :style="{ color: calculateAge(row.issue_date) > 30 ? '#ef4444' : calculateAge(row.issue_date) > 15 ? '#f59e0b' : 'var(--color-text-primary)' }">
-                {{ calculateAge(row.issue_date) }} วัน
+              <td class="px-4 py-3 font-mono break-all" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ row.doc_number || '-' }} <br> 
+                <span 
+                  v-if="row.ref_po && row.ref_po !== '-'" 
+                  @click="goToDocumentDetail(row.ref_po)" 
+                  class="relative cursor-pointer text-blue-500 dark:text-blue-400 after:absolute after:bottom-0 after:left-0 after:h-[1px] after:w-0 after:bg-blue-500 dark:after:bg-blue-400 after:transition-all after:duration-500 
+                  hover:after:w-full"> 
+                    {{ row.ref_po }} 
+                </span> 
+                <span v-else>-</span> 
               </td>
+              <!-- <td class="px-4 py-3 font-mono break-all" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ row.ref_po || '-' }}</td> -->
+              <td class="px-4 py-3 text-center" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ row.issue_date || '-' }} <br> <span :style="{ color: calculateAge(row.issue_date) > 30 ? '#ef4444' : calculateAge(row.issue_date) > 15 ? '#f59e0b' : 'var(--color-text-primary)' }">[ {{ calculateAge(row.issue_date) }} วัน ]</span></td>
+              <!-- <td class="px-4 py-3 font-mono" style="border-right: 1px solid var(--color-border)" :>
+                
+              </td> -->
               <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ row.organization || '-' }}</td>
+              <td class="px-4 py-3 font-mono whitespace-normal break-words" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ row.project || '-' }}</td>
               <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">
                 <div v-if="row.acc_code" class="text-[11px] font-mono text-blue-500 mb-0.5">{{ row.acc_code }}</div>
                 <div>{{ row.invoice_note || row.item_name || '-' }}</div>

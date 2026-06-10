@@ -6,6 +6,18 @@ import { useAuthStore } from '@/stores/auth'
 
 const trcloudStore = useTrcloudStore()
 const auth = useAuthStore()
+const emit = defineEmits(['selectPage'])
+
+function goToDocumentDetail(docNumber) {
+  if (!docNumber || docNumber === '-') return;
+  
+  emit('selectPage', {
+    itemId: "/#/document_detail",
+    itemLabel: `รายละเอียดเอกสาร ${docNumber}`,
+    docNumber: docNumber
+  });
+}
+
 const trcloudPoRows = computed(() => trcloudStore.poRows)
 const trcloudLoading = computed(() => trcloudStore.loading)
 const trcloudDateFrom = computed({
@@ -449,9 +461,9 @@ function getDisplayBadgeInfo(row) {
         <table class="w-full text-[13px] min-w-[1060px] border-collapse">
           <thead>
             <tr style="background: var(--color-bg-body); border-bottom: 1px solid var(--color-border)">
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">เลขที่เอกสาร</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิงEXP</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่</th>
+              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">เลขที่เอกสาร-อ้างอิง</th>
+              <!-- <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิงEXP</th> -->
+              <th class="px-4 py-3 text-left font-medium min-w-[105px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่</th>
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อายุเอกสาร</th>
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ผู้ขาย/หน่วยงาน</th>
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">Staff</th>
@@ -480,13 +492,30 @@ function getDisplayBadgeInfo(row) {
               class="dark:hover:bg-gray-200/50 hover:bg-blue-100/50 transition-colors"
               style="border-bottom: 1px solid var(--color-border)"
             >
-              <td class="px-4 py-3 font-medium font-mono" style="color: #7c3aed; border-right: 1px solid var(--color-border)">{{ r.document_number || r.po_id || '-' }}</td>
-              <td class="px-4 py-3 font-mono" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.expense || r.expense_no || r.expense_number || r.expense_doc || r.expense_id || '-' }}</td>
+              <td class="px-4 py-3 font-medium font-mono" style="color: #7c3aed; border-right: 1px solid var(--color-border)">{{ r.document_number || r.po_id || '-' }} <br> 
+                <span 
+                  v-if="(r.expense || r.expense_no || r.expense_number || r.expense_doc || r.expense_id) && (r.expense || r.expense_no || r.expense_number || r.expense_doc || r.expense_id) !== '-'" 
+                  @click="goToDocumentDetail(r.expense || r.expense_no || r.expense_number || r.expense_doc || r.expense_id)" 
+                  class="relative cursor-pointer text-blue-500 dark:text-blue-400 after:absolute after:bottom-0 after:left-0 after:h-[1px] after:w-0 after:bg-blue-500 dark:after:bg-blue-400 after:transition-all after:duration-500 
+                  hover:after:w-full"> 
+                    {{ r.expense || r.expense_no || r.expense_number || r.expense_doc || r.expense_id || '-' }}
+                </span> 
+                <span v-else>-</span> 
+              </td>
               <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.issue_date || '-' }}</td>
               <td class="px-4 py-3 font-medium" style="color: #3b82f6; border-right: 1px solid var(--color-border)">{{ calculateDocAge(r.issue_date || r.date) }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.organization || '-' }}</td>
               <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ getStaffName(r) }}</td>
-              <td class="px-4 py-3 font-mono" style="color: #00d4ff; border-right: 1px solid var(--color-border)">{{ r.pr || r.reference || '-' }}</td>
+              <td class="px-4 py-3 font-mono" style="color: #00d4ff; border-right: 1px solid var(--color-border)">
+                <span 
+                  v-if="(r.pr || r.reference) && (r.pr || r.reference) !== '-'" 
+                  @click="goToDocumentDetail(r.pr || r.reference)" 
+                  class="relative cursor-pointer text-blue-500 dark:text-blue-400 after:absolute after:bottom-0 after:left-0 after:h-[1px] after:w-0 after:bg-blue-500 dark:after:bg-blue-400 after:transition-all after:duration-500 
+                  hover:after:w-full"> 
+                    {{ r.pr || r.reference || '-' }}
+                </span> 
+                <span v-else>{{ r.reference || '-' }}</span> 
+              </td>
               <td class="px-4 py-3" style="color: var(--color-text-primary); border-right: 1px solid var(--color-border)">{{ r.project || '-' }}</td>
               <td class="px-4 py-3 text-right font-mono" style="color: #f59e0b; border-right: 1px solid var(--color-border)">{{ Number(r.grand_total || 0).toLocaleString('th-TH', {minimumFractionDigits:2, maximumFractionDigits:2}) }}</td>
               <td class="px-4 py-3 text-center" style="border-right: 1px solid var(--color-border)">

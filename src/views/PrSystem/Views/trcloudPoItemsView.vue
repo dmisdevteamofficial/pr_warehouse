@@ -305,6 +305,16 @@ function getIdentityString(row) {
   return `${doc} | ${item} [PO]`
 }
 
+function goToDocumentDetail(docNumber) {
+  if (!docNumber || docNumber === '-') return;
+  
+  emit('selectPage', {
+    itemId: "/#/document_detail",
+    itemLabel: `รายละเอียดเอกสาร ${docNumber}`,
+    docNumber: docNumber
+  });
+}
+
 function sendToExp(rows) {
   const items = Array.isArray(rows) ? rows : [rows]
   if (items.length === 0) return
@@ -491,10 +501,10 @@ onMounted(async () => {
 
     <div class="rounded-xl border overflow-hidden" style="background: var(--color-bg-card); border-color: var(--color-border)">
       <div class="overflow-x-auto">
-        <table class="w-full text-[13px] min-w-[1460px] border-collapse table-fixed">
+        <table class="w-full text-[13px] min-w-[1600px] border-collapse table-fixed">
           <thead>
             <tr class="text-left" style="background: var(--color-bg-body); border-bottom: 1px solid var(--color-border)">
-              <th class="px-4 py-3 font-medium w-[50px] text-center relative" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">
+              <th class="px-4 py-3 font-medium w-[40px] text-center relative" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">
                 <div v-if="showSelection">
                   <input 
                     type="checkbox" 
@@ -528,20 +538,21 @@ onMounted(async () => {
                   </div>
                 </div>
               </th>
-              <th class="px-4 py-3 font-medium w-[130px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">เลขที่เอกสาร</th>
-              <th class="px-4 py-3 font-medium w-[130px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิงEXP</th>
-              <th class="px-4 py-3 font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่</th>
-              <th class="px-4 py-3 font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อายุ (วัน)</th>
+              <th class="px-4 py-3 font-medium w-[115px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">เลขที่เอกสาร</th>
+              <!-- <th class="px-4 py-3 font-medium w-[120px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อ้างอิงEXP</th> -->
+              <th class="px-4 py-3 font-medium w-[100px] text-center" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่-อายุ</th>
+              <!-- <th class="px-4 py-3 font-medium w-[100px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อายุ (วัน)</th> -->
               <th class="px-4 py-3 font-medium w-[200px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">คู่ค้า</th>
+              <th class="px-4 py-3 font-medium w-[120px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">Project</th>
               <th class="px-4 py-3 font-medium w-[150px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">Staff</th>
               <th class="px-4 py-3 font-medium min-w-[200px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">รายการสินค้า / คำอธิบาย</th>
               <th class="px-4 py-3 font-medium w-[80px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">จำนวน</th>
-              <th class="px-4 py-3 font-medium w-[80px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">หน่วย</th>
+              <!-- <th class="px-4 py-3 font-medium w-[80px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">หน่วย</th> -->
               <th class="px-4 py-3 font-medium w-[110px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ราคา/หน่วย</th>
               <th class="px-4 py-3 font-medium w-[110px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ยอดรวม</th>
               <th class="px-4 py-3 font-medium w-[110px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ยอดที่ชำระ</th>
               <th class="px-4 py-3 font-medium text-center w-[70px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ติดตาม</th>
-              <th class="px-4 py-3 font-medium w-[120px]" style="color: var(--color-text-muted)">สถานะ</th>
+              <th class="px-4 py-3 font-medium w-[100px]" style="color: var(--color-text-muted)">สถานะ</th>
             </tr>
           </thead>
           <tbody>
@@ -554,7 +565,7 @@ onMounted(async () => {
               </td>
             </tr>
             <tr v-else-if="!filteredRows.length">
-              <td colspan="15" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบรายการ PO รายการสินค้า</td>
+              <td colspan="14" class="px-4 py-12 text-center" style="color: var(--color-text-muted)">ไม่พบรายการ PO รายการสินค้า</td>
             </tr>
             <tr v-for="(row, index) in filteredRows" :key="getRowIdentity(row)" class="dark:hover:bg-gray-200/50 hover:bg-blue-100/50 transition-colors" :style="{ borderBottom: '1px solid var(--color-border)', ...(isAddedToTracking(row) ? { boxShadow: 'inset 3px 0 0 #16a34a', background: 'rgba(16,185,129,0.06)' } : {}) }">
               <td class="px-4 py-3 text-center relative" style="border-right: 1px solid var(--color-border)">
@@ -591,13 +602,25 @@ onMounted(async () => {
                   </div>
                 </div>
               </td>
-              <td class="px-4 py-3 font-mono break-all" style="color: var(--color-text-primary)">{{ row.doc_number || '-' }}</td>
-              <td class="px-4 py-3 font-mono break-all" style="color: var(--color-text-primary)">{{ row.expense || '-' }}</td>
-              <td class="px-4 py-3" style="color: var(--color-text-primary)">{{ row.issue_date || '-' }}</td>
-              <td class="px-4 py-3 font-mono" :style="{ color: calculateAge(row.issue_date) > 30 ? '#ef4444' : calculateAge(row.issue_date) > 15 ? '#f59e0b' : 'var(--color-text-primary)' }">
-                {{ calculateAge(row.issue_date) }} วัน
+              <td class="px-4 py-3 font-mono break-all" style="color: var(--color-text-primary)">{{ row.doc_number || '-' }}<br> 
+                <span 
+                  v-if="row.expense && row.expense !== '-'" 
+                  @click="goToDocumentDetail(row.expense)" 
+                  class="relative cursor-pointer text-blue-500 dark:text-blue-400 after:absolute after:bottom-0 after:left-0 after:h-[1px] after:w-0 after:bg-blue-500 dark:after:bg-blue-400 after:transition-all after:duration-500 
+                  hover:after:w-full"> 
+                    {{ row.expense }} 
+                </span> 
+                <span v-else>-</span> 
               </td>
+              <!-- <td class="px-4 py-3 font-mono break-all" style="color: var(--color-text-primary)">{{ row.expense || '-' }}</td> -->
+              <td class="px-4 py-3 text-center" style="color: var(--color-text-primary)">{{ row.issue_date || '-' }} <br><span class="bg-rose-100 dark:bg-rose-800/30 rounded-full px-1.5" :style="{ color: calculateAge(row.issue_date) > 30 ? '#ef4444' : calculateAge(row.issue_date) > 15 ? '#f59e0b' : 'var(--color-text-primary)' }">{{ calculateAge(row.issue_date) }} วัน</span></td>
+              <!-- <td class="px-4 py-3 font-mono" :style="{ color: calculateAge(row.issue_date) > 30 ? '#ef4444' : calculateAge(row.issue_date) > 15 ? '#f59e0b' : 'var(--color-text-primary)' }">
+                {{ calculateAge(row.issue_date) }} วัน
+              </td> -->
               <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary)">{{ row.organization || '-' }}</td>
+              <td class="px-4 py-3 font-mono whitespace-normal break-words" style="color: var(--color-text-primary)">
+                {{ row.project || '-' }}
+              </td>
               <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary)">{{ row.staff || '-' }}</td>
               <td class="px-4 py-3 whitespace-normal break-words" style="color: var(--color-text-primary)">
                 {{ row.item_name || '-' }}
@@ -608,8 +631,8 @@ onMounted(async () => {
                   <i class="fa-brands fa-line"></i> ส่ง LINE แล้ว
                 </span>
               </td>
-              <td class="px-4 py-3" style="color: var(--color-text-primary)">{{ row.quantity || '-' }}</td>
-              <td class="px-4 py-3" style="color: var(--color-text-primary)">{{ row.unit || '-' }}</td>
+              <td class="px-4 py-3" style="color: var(--color-text-primary)">{{ row.quantity || '-' }} {{ row.unit || '' }}</td>
+              <!-- <td class="px-4 py-3" style="color: var(--color-text-primary)">{{ row.unit || '-' }}</td> -->
               <td class="px-4 py-3 font-mono" style="color: var(--color-text-primary)">{{ Number(row.price || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</td>
               <td class="px-4 py-3 font-mono" style="color: var(--color-text-primary)">{{ Number(row.item_total || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</td>
               <td class="px-4 py-3 font-mono" style="color: var(--color-text-primary)">{{ Number(row.payment || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</td>

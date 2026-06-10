@@ -29,6 +29,7 @@ import TrcloudPoItemsView from "./Views/trcloudPoItemsView.vue"
 import TrcloudExpItemsView from "./Views/expView.vue"
 import PvView from "./Views/pvView.vue"
 import TrcloudDocsView from "./Views/trcloudDocsView.vue"
+import TrcloudDocumentDetailView from "./Views/TrcloudDocumentDetailView.vue"
 import PrpoappvView from "./Views/prpoappvView.vue"
 import SubmitAmountView from "./Views/submit_amountView.vue"
 import NotificationSummaryView from "./Views/notificationSummaryView.vue"
@@ -81,6 +82,15 @@ const selectionOptions = [
 
 function normalizeSelection(next) {
   const id = (next?.itemId ?? "").toString()
+  
+  // Special case for document detail page
+  if (id.includes("document_detail")) {
+    return {
+      itemId: id,
+      itemLabel: (next?.itemLabel ?? "รายละเอียดเอกสาร").toString()
+    }
+  }
+  
   const found = selectionOptions.find((s) => s.itemId === id)
   if (!found) return selectionOptions[0]
   return {
@@ -97,9 +107,11 @@ const selection = ref({
 const pageTitle = computed(() => selection.value.itemLabel ?? "Dashboard")
 const editApRequestId = ref(null)
 const trackingRefreshKey = ref(0)
+const detailDocNumber = ref(null)
 
 const activePage = computed(() => {
   const id = (selection.value.itemId ?? "").toString()
+  if (id.includes("document_detail")) return "document_detail"
   if (id.includes("dashboard")) return "dashboard"
   if (id.includes("pr_list")) return "pr_list"
   if (id.includes("pr_po_items_detail")) return "pr_exp_items"
@@ -136,6 +148,12 @@ const pageType = computed(() => {
 
 const onSelect = (payload) => {
   if (!payload || typeof payload !== "object") return
+  
+  // Handle document detail navigation
+  if (payload.itemId?.includes("document_detail")) {
+    detailDocNumber.value = payload.docNumber || null
+  }
+  
   selection.value = normalizeSelection({
     itemId: payload.itemId ?? selection.value.itemId,
     itemLabel: payload.itemLabel ?? selection.value.itemLabel,
@@ -273,13 +291,18 @@ const onLogout = async () => {
         <ExpLineView v-else-if="activePage === 'form_line' && pageType === 'exp'" :type="pageType" />
 
         <PrView v-else-if="activePage === 'pr_list'" />
-        <PoView v-else-if="activePage === 'pr_po'" />
+        <PoView v-else-if="activePage === 'pr_po'" @selectPage="onSelect" />
         <ApView v-else-if="activePage === 'pr_ap'" />
         <TrcloudPoItemsView v-else-if="activePage === 'pr_po_items'" @selectPage="onSelect" />
         <TrcloudExpItemsView v-else-if="activePage === 'pr_exp_items'" @selectPage="onSelect" />
         <TrcloudApItemsView v-else-if="activePage === 'pr_ap_items'" @selectPage="onSelect" />
         <TrcloudDocsView v-else-if="activePage === 'pr_trcloud'" />
         <PvView v-else-if="activePage === 'pr_pv'" />
+        <TrcloudDocumentDetailView
+          v-else-if="activePage === 'document_detail'"
+          :docNumber="detailDocNumber"
+          @selectPage="onSelect"
+        />
         <PrpoappvView v-else-if="activePage === 'pr_history'" />
         <div
           v-else-if="activePage !== 'default'"

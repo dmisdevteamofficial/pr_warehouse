@@ -24,6 +24,28 @@ export const useTrcloudStore = defineStore('trcloud', () => {
     expense: ''
   })
 
+  // Pre-built doc number index for fast lookups
+  const documentByDocNumber = computed(() => {
+    const index = new Map()
+    const keysToCheck = ['document_number', 'expense_number', 'expense', 'expense_no', 'expense_doc', 'expense_id', 'ap_number', 'po_number', 'po', 'pr_number', 'pr', 'pr_no', 'pv_number', 'invoice_number', 'doc_number', 'reference', 'id']
+    const addToIndex = (rows, type) => {
+      for (const row of rows) {
+        for (const key of keysToCheck) {
+          const val = String(row[key] || '').trim()
+          if (val && !index.has(val)) {
+            index.set(val, { ...row, __type: type })
+          }
+        }
+      }
+    }
+    addToIndex(expenseRows.value, 'expense')
+    addToIndex(apRows.value, 'ap')
+    addToIndex(poRows.value, 'po')
+    addToIndex(prRows.value, 'pr')
+    addToIndex(pvRows.value, 'pv')
+    return index
+  })
+
   const apItemListKeys = [
     'items', 'rows', 'detail', 'item', 'products', 'product_list', 'rows_list', 'details', 'line_items', 'order_items'
   ]
@@ -65,6 +87,8 @@ export const useTrcloudStore = defineStore('trcloud', () => {
     const status = invoice?.payment_status || invoice?.status || invoice?.status_payment || invoice?.status_text || invoice?.invoice_status || ''
 
     return {
+      ...invoice, // Copy all original invoice keys to the item
+      ...item, // Copy all original item keys to the item
       unique_id: item?.item_id || item?.ap_item_id || item?.po_item_id || `${docNumber}_${itemName}_${item?.quantity}_${item?.price}_${Math.random().toString(36).substr(2, 9)}`,
       doc_number: docNumber,
       invoice_number: invoiceNumber,
@@ -93,13 +117,14 @@ export const useTrcloudStore = defineStore('trcloud', () => {
   const extractApItemRows = (apData) => {
     if (!Array.isArray(apData) || !apData.length) return []
     const rows = []
-    for (const invoice of apData) {
+    for (let i = 0, len = apData.length; i < len; i++) {
+      const invoice = apData[i]
       const [itemKey, itemList] = findApItemList(invoice)
       if (itemList) {
         const baseInvoice = { ...invoice }
         delete baseInvoice[itemKey]
-        for (const item of itemList) {
-          rows.push(buildApItemRow(baseInvoice, item))
+        for (let j = 0, jlen = itemList.length; j < jlen; j++) {
+          rows.push(buildApItemRow(baseInvoice, itemList[j]))
         }
       } else {
         const itemName = invoice?.description || invoice?.remark || invoice?.note || invoice?.title || invoice?.item_name || invoice?.product_name || invoice?.description_th || ''
@@ -107,6 +132,7 @@ export const useTrcloudStore = defineStore('trcloud', () => {
         const companyFormat = invoice?.company_format || ''
         const docNumber = companyFormat ? `${companyFormat}${invoiceNumber}` : String(invoiceNumber || '')
         rows.push({
+          ...invoice, // Copy all original invoice keys
           unique_id: invoice?.item_id || invoice?.ap_item_id || `${docNumber}_${invoice?.issue_date}_${invoice?.total || invoice?.grand_total}`,
           doc_number: docNumber,
           invoice_number: invoiceNumber,
@@ -138,14 +164,14 @@ export const useTrcloudStore = defineStore('trcloud', () => {
   const extractPoItemRows = (poData) => {
     if (!Array.isArray(poData) || !poData.length) return []
     const rows = []
-    for (const po of poData) {
-      // Reuse the same item-list detection as AP
+    for (let i = 0, len = poData.length; i < len; i++) {
+      const po = poData[i]
       const [itemKey, itemList] = findApItemList(po)
       if (itemList) {
         const basePo = { ...po }
         delete basePo[itemKey]
-        for (const item of itemList) {
-          rows.push(buildApItemRow(basePo, item))
+        for (let j = 0, jlen = itemList.length; j < jlen; j++) {
+          rows.push(buildApItemRow(basePo, itemList[j]))
         }
       } else {
         const itemName = po?.description || po?.remark || po?.note || po?.title || ''
@@ -153,6 +179,7 @@ export const useTrcloudStore = defineStore('trcloud', () => {
         const companyFormat = po?.company_format || ''
         const docNumber = companyFormat ? `${companyFormat}${poNumber}` : String(poNumber || '')
         rows.push({
+          ...po, // Copy all original PO keys
           unique_id: po?.item_id || po?.po_item_id || `${docNumber}_${po?.issue_date}_${po?.total || po?.grand_total}`,
           doc_number: docNumber,
           invoice_number: poNumber,
@@ -184,13 +211,14 @@ export const useTrcloudStore = defineStore('trcloud', () => {
   const extractPrItemRows = (prData) => {
     if (!Array.isArray(prData) || !prData.length) return []
     const rows = []
-    for (const pr of prData) {
+    for (let i = 0, len = prData.length; i < len; i++) {
+      const pr = prData[i]
       const [itemKey, itemList] = findApItemList(pr)
       if (itemList) {
         const basePr = { ...pr }
         delete basePr[itemKey]
-        for (const item of itemList) {
-          rows.push(buildApItemRow(basePr, item))
+        for (let j = 0, jlen = itemList.length; j < jlen; j++) {
+          rows.push(buildApItemRow(basePr, itemList[j]))
         }
       } else {
         const itemName = pr?.description || pr?.remark || pr?.note || pr?.title || ''
@@ -198,6 +226,7 @@ export const useTrcloudStore = defineStore('trcloud', () => {
         const companyFormat = pr?.company_format || ''
         const docNumber = companyFormat ? `${companyFormat}${prNumber}` : String(prNumber || '')
         rows.push({
+          ...pr, // Copy all original PR keys
           unique_id: pr?.item_id || pr?.pr_id || `${docNumber}_${pr?.issue_date}_${pr?.total || pr?.grand_total}`,
           doc_number: docNumber,
           invoice_number: prNumber,
@@ -230,6 +259,67 @@ export const useTrcloudStore = defineStore('trcloud', () => {
   const poItemRows = computed(() => extractPoItemRows(poRows.value))
   const prItemRows = computed(() => extractPrItemRows(prRows.value))
 
+  // Type-specific keys for items, to avoid mixing document types
+  const apItemKeys = [
+    'document_number', 'ap_number', 'invoice_number', 'doc_number', 'reference', 'id'
+  ]
+  const poItemKeys = [
+    'document_number', 'po_number', 'po', 'doc_number', 'reference', 'id'
+  ]
+  const expenseItemKeys = [
+    'document_number', 'expense_number', 'expense', 'expense_no', 'expense_doc', 'expense_id',
+    'doc_number', 'reference', 'id'
+  ]
+
+  // Pre-built item indexes for fast lookups by doc number
+  const apItemsByDocNumber = computed(() => {
+    const index = new Map()
+    for (const item of apItemRows.value) {
+      for (const key of apItemKeys) {
+        const val = String(item[key] || '').trim()
+        if (val) {
+          if (!index.has(val)) index.set(val, [])
+          if (!index.get(val).find(i => i.unique_id === item.unique_id)) {
+            index.get(val).push(item)
+          }
+        }
+      }
+    }
+    return index
+  })
+
+  const poItemsByDocNumber = computed(() => {
+    const index = new Map()
+    for (const item of poItemRows.value) {
+      for (const key of poItemKeys) {
+        const val = String(item[key] || '').trim()
+        if (val) {
+          if (!index.has(val)) index.set(val, [])
+          if (!index.get(val).find(i => i.unique_id === item.unique_id)) {
+            index.get(val).push(item)
+          }
+        }
+      }
+    }
+    return index
+  })
+
+  const expenseItemsByDocNumber = computed(() => {
+    const index = new Map()
+    for (const item of expenseItemRows.value) {
+      for (const key of expenseItemKeys) {
+        const val = String(item[key] || '').trim()
+        if (val) {
+          if (!index.has(val)) index.set(val, [])
+          if (!index.get(val).find(i => i.unique_id === item.unique_id)) {
+            index.get(val).push(item)
+          }
+        }
+      }
+    }
+    return index
+  })
+
   const buildExpenseItemRow = (exp, item) => {
     const expNumber = exp?.expense_number || exp?.invoice_number || exp?.doc_number || exp?.reference || exp?.id || ''
     const companyFormat = exp?.company_format || ''
@@ -241,6 +331,8 @@ export const useTrcloudStore = defineStore('trcloud', () => {
     const itemTotal = exp?.grand_total || exp?.total || item?.total || 0
 
     return {
+      ...exp, // Copy all original expense keys to the item
+      ...item, // Copy all original item keys to the item
       unique_id: item?.x_id || item?.item_id || `${docNumber}_${itemName}_${itemTotal}_${Math.random().toString(36).substr(2, 9)}`,
       doc_number: docNumber,
       invoice_number: expNumber,
@@ -269,13 +361,31 @@ export const useTrcloudStore = defineStore('trcloud', () => {
   const extractExpenseItemRows = (expenseData, poItems = []) => {
     if (!Array.isArray(expenseData) || !expenseData.length) return []
     const rows = []
-    for (const exp of expenseData) {
+    // Pre-build PO items index for faster lookups
+    const poItemsIndex = new Map()
+    if (Array.isArray(poItems) && poItems.length > 0) {
+      for (let i = 0, len = poItems.length; i < len; i++) {
+        const p = poItems[i]
+        for (const key of itemKeysToCheck) {
+          const val = String(p[key] || '').trim()
+          if (val) {
+            if (!poItemsIndex.has(val)) poItemsIndex.set(val, [])
+            if (!poItemsIndex.get(val).find(pi => pi.unique_id === p.unique_id)) {
+              poItemsIndex.get(val).push(p)
+            }
+          }
+        }
+      }
+    }
+
+    for (let i = 0, len = expenseData.length; i < len; i++) {
+      const exp = expenseData[i]
       const [itemKey, itemList] = findApItemList(exp)
       if (itemList) {
         const baseExp = { ...exp }
         delete baseExp[itemKey]
-        for (const item of itemList) {
-          rows.push(buildExpenseItemRow(baseExp, item))
+        for (let j = 0, jlen = itemList.length; j < jlen; j++) {
+          rows.push(buildExpenseItemRow(baseExp, itemList[j]))
         }
       } else {
         const itemName = exp?.description || exp?.remark || exp?.note || exp?.title || exp?.item_name || ''
@@ -287,13 +397,12 @@ export const useTrcloudStore = defineStore('trcloud', () => {
         const quantity = exp?.quantity || exp?.qty || 1
         const refPo = exp?.reference || exp?.po || exp?.po_number || ''
 
-        // Fallback to PO items if this EXP has a Ref PO but no items of its own
-        const matchedPoItems = refPo && Array.isArray(poItems) 
-          ? poItems.filter(p => p.doc_number === refPo || p.invoice_number === refPo) 
-          : []
+        // Use pre-built index instead of filtering
+        const matchedPoItems = refPo ? poItemsIndex.get(String(refPo).trim()) || [] : []
 
         if (matchedPoItems.length > 0) {
-          for (const poItem of matchedPoItems) {
+          for (let j = 0, jlen = matchedPoItems.length; j < jlen; j++) {
+            const poItem = matchedPoItems[j]
             rows.push({
               ...poItem,
               unique_id: `exp_link_${exp.id || exp.expense_id}_${poItem.unique_id}`,
@@ -309,6 +418,7 @@ export const useTrcloudStore = defineStore('trcloud', () => {
            }
          } else {
            rows.push({
+             ...exp, // Copy all original expense keys
              unique_id: exp?.expense_id || exp?.id || `${docNumber}_${exp?.issue_date}_${itemTotal}`,
              doc_number: docNumber,
              invoice_number: expNumber,
@@ -326,13 +436,13 @@ export const useTrcloudStore = defineStore('trcloud', () => {
              acc_en: exp?.acc_en || '',
              invoice_note: exp?.invoice_note || exp?.remark || exp?.note || '',
              staff: exp?.staff || exp?.created_by || '',
-            department: exp?.department || '',
-            project: exp?.project || '',
-            source: exp?.source || '',
-            ref_po: refPo,
-            payment: exp?.payment || 0
-          })
-        }
+             department: exp?.department || '',
+             project: exp?.project || '',
+             source: exp?.source || '',
+             ref_po: refPo,
+             payment: exp?.payment || 0
+           })
+         }
       }
     }
     return rows
@@ -649,9 +759,7 @@ export const useTrcloudStore = defineStore('trcloud', () => {
             break
           }
           const res = await response.json()
-          if (type === 'pv') {
-            console.log(`Response for PV (page ${page}):`, res)
-          }
+          // Removed verbose PV page logging
           
           const isSuccess = res.success == 1 || res.success === true || Array.isArray(res.result) || Array.isArray(res.data)
           if (!isSuccess) {
@@ -857,6 +965,8 @@ export const useTrcloudStore = defineStore('trcloud', () => {
   return {
     prRows, poRows, apRows, pvRows, expenseRows,
     apItemRows, poItemRows, expenseItemRows,
+    apItemsByDocNumber, poItemsByDocNumber, expenseItemsByDocNumber,
+    documentByDocNumber,
     loading, lastFetched, isLoaded,
     dateFrom, dateTo,
     appoFormState, appoRowsState, appoApSearchTextState,

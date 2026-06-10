@@ -508,15 +508,15 @@ function getDisplayBadgeInfo(row) {
           <thead>
             <tr style="background: var(--color-bg-body); border-bottom: 1px solid var(--color-border)">
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">เลขที่เอกสาร</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่</th>
+              <th class="px-4 py-3 text-left font-medium min-w-[110px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">วันที่</th>
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">อายุเอกสาร</th>
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ผู้ขาย/หน่วยงาน</th>
               <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">Staff</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">แผนก</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">โครงการ</th>
+              <th class="px-4 py-3 text-left font-medium min-w-[190px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">แผนก</th>
+              <th class="px-4 py-3 text-left font-medium min-w-[260px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">โครงการ</th>
               <th class="px-4 py-3 text-right font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">มูลค่า</th>
               <th class="px-4 py-3 text-center font-medium" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">ติดตาม</th>
-              <th class="px-4 py-3 text-left font-medium" style="color: var(--color-text-muted)">สถานะ</th>
+              <th class="px-4 py-3 text-left font-medium min-w-[30px]" style="color: var(--color-text-muted); border-right: 1px solid var(--color-border)">สถานะ</th>
             </tr>
           </thead>
           <tbody>
